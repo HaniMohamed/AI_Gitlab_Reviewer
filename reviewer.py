@@ -1,4 +1,6 @@
 from langchain_community.llms import Ollama
+from langchain.output_parsers import PydanticOutputParser
+from pydantic import BaseModel
 from langchain.prompts import PromptTemplate
 from gitlab_client import (
     get_mr_diffs,
@@ -6,9 +8,18 @@ from gitlab_client import (
     post_summary_comment
 )
 from prompts import CODE_REVIEW_PROMPT
-import json
+
+# Define expected structure
+class ReviewItem(BaseModel):
+    file: str
+    line: int
+    comment: str
+    severity: str
+
 
 llm = Ollama(model="codellama:7b")
+# Create parser
+parser = PydanticOutputParser(pydantic_object=ReviewItem)
 
 prompt = PromptTemplate(
     template=CODE_REVIEW_PROMPT,
@@ -27,8 +38,9 @@ def review_merge_request(project_id, mr_iid):
         response = llm(prompt.format(diff=diff_text))
 
         try:
-            findings = json.loads(response)
-        except Exception:
+            findings = parser.parse(response)
+        except Exception as e:
+            print("Failed to parse JSON:", e)
             continue
 
         for item in findings:

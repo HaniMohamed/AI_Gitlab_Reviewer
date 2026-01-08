@@ -1,0 +1,10 @@
+{
+    "object_kind": "merge_request",
+    "project": {
+      "path_with_namespace": "super-app/gosi-super-app",
+      "web_url": "https://gitlab.gosi.ins/super-app/gosi-super-app"
+    },
+    "object_attributes": {
+      "iid": 42
+    }
+  }

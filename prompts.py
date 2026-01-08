@@ -6,11 +6,15 @@ Review the following git diff and:
 2. Suggest improvements
 3. Point out bad practices
 
-Return results as JSON with:
-- file
-- line
-- comment
-- severity (low | medium | high)
+**OUTPUT FORMAT (ONLY JSON, NOTHING ELSE):**
+[
+  {
+    "file": "file_name.dart",
+    "line": 23,
+    "comment": "Use const constructor here",
+    "severity": "low"
+  }
+]
 
 Diff:
 {diff}

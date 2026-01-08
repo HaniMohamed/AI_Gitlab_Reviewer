@@ -1,7 +1,7 @@
 import gitlab
 from config import GITLAB_URL, GITLAB_TOKEN
 
-gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN)
+gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN, ssl_verify=False)
 
 def get_project_by_path(path_with_namespace: str):
     """
