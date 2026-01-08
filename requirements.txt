@@ -1,0 +1,9 @@
+# Web framework
+flask>=3.0.0,<4.0.0
+
+# GitLab API client
+python-gitlab>=4.0.0,<5.0.0
+
+# LangChain for LLM integration
+langchain>=0.1.0,<1.0.0
+langchain-community>=0.0.20,<1.0.0
