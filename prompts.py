@@ -8,12 +8,12 @@ Review the following git diff and:
 
 **OUTPUT FORMAT (ONLY JSON, NOTHING ELSE):**
 [
-  {
+  {{
     "file": "file_name.dart",
     "line": 23,
     "comment": "Use const constructor here",
     "severity": "low"
-  }
+  }}
 ]
 
 Diff:
