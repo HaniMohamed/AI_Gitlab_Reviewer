@@ -54,7 +54,7 @@ def post_inline_comment(project_id, mr_iid, body, file_path, new_line, old_line=
 
     try:
         mr.discussions.create({
-            "body": body,
+            "body": "🤖:\n" + body,
             "position": position
         })
         print(f"Comment posted on {file_path}:{new_line}")
