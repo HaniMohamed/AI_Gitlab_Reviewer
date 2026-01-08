@@ -1,12 +1,20 @@
 from flask import Flask, request, jsonify
-from reviewer import review_merge_request
+from reviewer import review_merge_request, llm
 from gitlab_client import get_project_by_path
+from config import GITLAB_URL, OLLAMA_MODEL, OLLAMA_BASE_URL
 
 app = Flask(__name__)
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok"}
+    return {"status": "ok",
+            "config": {
+                "gitlab_url": GITLAB_URL,
+                "ollama_model": OLLAMA_MODEL,
+                "ollama_base_url": OLLAMA_BASE_URL,
+                "ollama_model_in_use": llm.model
+            }
+    }
 
 @app.route("/webhook/gitlab", methods=["POST"])
 def gitlab_webhook():

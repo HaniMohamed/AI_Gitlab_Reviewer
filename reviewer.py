@@ -1,11 +1,12 @@
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import Ollama
+from config import OLLAMA_MODEL
 from prompts import CODE_REVIEW_PROMPT
 from gitlab_client import get_mr_diffs, post_inline_comment, post_summary_comment
 import json
 import re
 
-llm = Ollama(model="codellama:7b")
+llm = Ollama(model=OLLAMA_MODEL)
 
 prompt = PromptTemplate(
     template=CODE_REVIEW_PROMPT,
