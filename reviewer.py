@@ -1,61 +1,63 @@
-from langchain_community.llms import Ollama
-from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel
 from langchain.prompts import PromptTemplate
-from gitlab_client import (
-    get_mr_diffs,
-    post_inline_comment,
-    post_summary_comment
-)
+from langchain_community.llms import Ollama
 from prompts import CODE_REVIEW_PROMPT
-
-# Define expected structure
-class ReviewItem(BaseModel):
-    file: str
-    line: int
-    comment: str
-    severity: str
-
+from gitlab_client import get_mr_diffs, post_inline_comment, post_summary_comment
+import json
+import re
 
 llm = Ollama(model="codellama:7b")
-# Create parser
-parser = PydanticOutputParser(pydantic_object=ReviewItem)
 
 prompt = PromptTemplate(
     template=CODE_REVIEW_PROMPT,
     input_variables=["diff"]
 )
 
+def parse_llm_output(text: str):
+    """Extract JSON array from model output."""
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            print("Failed to decode JSON")
+            return []
+    else:
+        print("No JSON found")
+        return []
+
 def review_merge_request(project_id, mr_iid):
     diffs = get_mr_diffs(project_id, mr_iid)
-
     summary = []
 
     for change in diffs:
         diff_text = change["diff"]
         file_path = change["new_path"]
 
-        response = llm(prompt.format(diff=diff_text))
+        # Format the prompt correctly
+        formatted_prompt = prompt.format(diff=diff_text)
 
-        try:
-            findings = parser.parse(response)
-        except Exception as e:
-            print("Failed to parse JSON:", e)
-            continue
+        # Call the LLM
+        response = llm(formatted_prompt)
+        print("Raw LLM output:", response)
 
+        # Parse JSON safely
+        findings = parse_llm_output(response)
+
+        # Post inline comments
         for item in findings:
             post_inline_comment(
-                project_id,
-                mr_iid,
+                project_id=project_id,
+                mr_iid=mr_iid,
                 body=f"**{item['severity'].upper()}**: {item['comment']}",
-                file_path=file_path,
-                line=item["line"]
+                file_path=item['file'],
+                new_line=item['line'],   # previously 'line', now 'new_line'
+                old_line=None            # optional, can be None for now
             )
-            summary.append(f"- `{file_path}:{item['line']}` {item['comment']}")
+            summary.append(f"- `{item['file']}:{item['line']}` {item['comment']}")
 
     if summary:
         post_summary_comment(
             project_id,
             mr_iid,
-            "### 🤖 AI Code Review Summary\n" + "\n".join(summary)
+            "### 🤖 AI Review Summary\n" + "\n".join(summary)
         )
