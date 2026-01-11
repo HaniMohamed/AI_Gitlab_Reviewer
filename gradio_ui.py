@@ -64,43 +64,43 @@ def create_mr_info_display(mr):
     
     labels_html = ""
     if mr.get('labels'):
-        labels_html = f"""
+            labels_html = f"""
         <div style="margin-top: 10px;">
-            <strong style="color: #374151;">Labels:</strong>
-            {', '.join([f'<span style="background: #3b82f6; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85em; margin-right: 6px; display: inline-block; margin-top: 4px;">{label}</span>' for label in mr['labels'][:5]])}
+            <strong style="color: rgba(255,255,255,0.95);">Labels:</strong>
+            {', '.join([f'<span style="background: #3b82f6; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85em; margin-right: 6px; display: inline-block; margin-top: 4px; border: 1px solid rgba(255,255,255,0.2);">{label}</span>' for label in mr['labels'][:5]])}
         </div>
         """
     
     return f"""
-    <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 24px; border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);">
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 24px; border-radius: 12px; color: white; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);">
         <h2 style="margin: 0 0 18px 0; font-size: 1.5em; font-weight: 600; color: white;">📝 {mr['title']}</h2>
-        <div style="background: rgba(255,255,255,0.15); padding: 18px; border-radius: 10px; margin-top: 12px; backdrop-filter: blur(10px);">
+        <div style="background: rgba(0,0,0,0.2); padding: 18px; border-radius: 10px; margin-top: 12px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1);">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div>
-                    <strong style="color: rgba(255,255,255,0.9); font-weight: 600;">🔀 Source Branch:</strong><br>
-                    <code style="background: rgba(0,0,0,0.25); color: #fbbf24; padding: 6px 12px; border-radius: 6px; display: inline-block; margin-top: 6px; font-size: 0.9em; font-weight: 500;">{mr['source_branch']}</code>
+                    <strong style="color: rgba(255,255,255,0.95); font-weight: 600;">🔀 Source Branch:</strong><br>
+                    <code style="background: rgba(0,0,0,0.3); color: #fcd34d; padding: 6px 12px; border-radius: 6px; display: inline-block; margin-top: 6px; font-size: 0.9em; font-weight: 500; border: 1px solid rgba(255,255,255,0.1);">{mr['source_branch']}</code>
                 </div>
                 <div>
-                    <strong style="color: rgba(255,255,255,0.9); font-weight: 600;">🎯 Target Branch:</strong><br>
-                    <code style="background: rgba(0,0,0,0.25); color: #fbbf24; padding: 6px 12px; border-radius: 6px; display: inline-block; margin-top: 6px; font-size: 0.9em; font-weight: 500;">{mr['target_branch']}</code>
+                    <strong style="color: rgba(255,255,255,0.95); font-weight: 600;">🎯 Target Branch:</strong><br>
+                    <code style="background: rgba(0,0,0,0.3); color: #fcd34d; padding: 6px 12px; border-radius: 6px; display: inline-block; margin-top: 6px; font-size: 0.9em; font-weight: 500; border: 1px solid rgba(255,255,255,0.1);">{mr['target_branch']}</code>
                 </div>
                 <div>
-                    <strong style="color: rgba(255,255,255,0.9); font-weight: 600;">👤 Author:</strong><br>
+                    <strong style="color: rgba(255,255,255,0.95); font-weight: 600;">👤 Author:</strong><br>
                     <span style="margin-top: 6px; display: inline-block; color: rgba(255,255,255,0.95);">{mr['author']} (@{mr.get('author_username', 'N/A')})</span>
                 </div>
                 <div>
-                    <strong style="color: rgba(255,255,255,0.9); font-weight: 600;">📅 Created:</strong><br>
+                    <strong style="color: rgba(255,255,255,0.95); font-weight: 600;">📅 Created:</strong><br>
                     <span style="margin-top: 6px; display: inline-block; color: rgba(255,255,255,0.95);">{format_date(mr['created_at'])}</span>
                 </div>
             </div>
             <div style="margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap;">
-                <span style="background: rgba(255,255,255,0.25); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.9em; font-weight: 500;">{state_badge}</span>
-                <span style="background: rgba(255,255,255,0.25); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.9em; font-weight: 500;">🔄 Status: {merge_status}</span>
-                {f'<span style="background: rgba(255,255,255,0.25); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.9em; font-weight: 500;">{draft_badge}</span>' if draft_badge else ''}
+                <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.9em; font-weight: 500; border: 1px solid rgba(255,255,255,0.1);">{state_badge}</span>
+                <span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.9em; font-weight: 500; border: 1px solid rgba(255,255,255,0.1);">🔄 Status: {merge_status}</span>
+                {f'<span style="background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.9em; font-weight: 500; border: 1px solid rgba(255,255,255,0.1);">{draft_badge}</span>' if draft_badge else ''}
             </div>
             {labels_html}
             <div style="margin-top: 16px;">
-                <a href="{mr['web_url']}" target="_blank" style="color: white; text-decoration: none; background: rgba(255,255,255,0.25); padding: 10px 18px; border-radius: 6px; display: inline-block; font-weight: 500; transition: background 0.2s;">
+                <a href="{mr['web_url']}" target="_blank" style="color: white; text-decoration: none; background: rgba(255,255,255,0.2); padding: 10px 18px; border-radius: 6px; display: inline-block; font-weight: 500; transition: background 0.2s; border: 1px solid rgba(255,255,255,0.1);">
                     🔗 Open in GitLab
                 </a>
             </div>
@@ -139,20 +139,20 @@ def create_env_info_display():
     """Create HTML display for environment information."""
     current_model = get_current_model()
     return f"""
-    <div style="background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); padding: 20px; border-radius: 12px; border: 1px solid #d1d5db;">
-        <h3 style="margin: 0 0 16px 0; color: #111827; font-size: 1.1em; font-weight: 600;">⚙️ Environment Configuration</h3>
+    <div style="background: linear-gradient(135deg, #27272a 0%, #18181b 100%); padding: 20px; border-radius: 12px; border: 1px solid #3f3f46;">
+        <h3 style="margin: 0 0 16px 0; color: #f4f4f5; font-size: 1.1em; font-weight: 600;">⚙️ Environment Configuration</h3>
         <div style="display: grid; gap: 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: white; border-radius: 8px;">
-                <strong style="color: #374151;">GitLab URL:</strong>
-                <code style="background: #f3f4f6; padding: 4px 8px; border-radius: 4px; color: #1f2937; font-size: 0.9em;">{GITLAB_URL}</code>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
+                <strong style="color: #d4d4d8;">GitLab URL:</strong>
+                <code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{GITLAB_URL}</code>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: white; border-radius: 8px;">
-                <strong style="color: #374151;">Ollama Base URL:</strong>
-                <code style="background: #f3f4f6; padding: 4px 8px; border-radius: 4px; color: #1f2937; font-size: 0.9em;">{OLLAMA_BASE_URL}</code>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
+                <strong style="color: #d4d4d8;">Ollama Base URL:</strong>
+                <code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{OLLAMA_BASE_URL}</code>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: white; border-radius: 8px;">
-                <strong style="color: #374151;">Current Model:</strong>
-                <code style="background: #dbeafe; padding: 4px 8px; border-radius: 4px; color: #1e40af; font-size: 0.9em; font-weight: 600;">{current_model}</code>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
+                <strong style="color: #d4d4d8;">Current Model:</strong>
+                <code style="background: #312e81; padding: 4px 8px; border-radius: 4px; color: #a5b4fc; font-size: 0.9em; font-weight: 600; border: 1px solid #4f46e5;">{current_model}</code>
             </div>
         </div>
     </div>
@@ -191,13 +191,13 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
                 <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Review was cancelled. {results.get('files_reviewed', 0)} file(s) were processed before cancellation.</p>
             </div>
             """
-            return cancelled_html, f"⚠️ Review cancelled after {elapsed_time}s. {results.get('files_reviewed', 0)} file(s) processed.", f"<div style='color: #f59e0b; font-weight: 500;'>⏹️ Cancelled after {elapsed_time}s</div>"
+            return cancelled_html, f"⚠️ Review cancelled after {elapsed_time}s. {results.get('files_reviewed', 0)} file(s) processed.", f"⏹️ Cancelled after {elapsed_time}s"
         
         # Format results
         findings_html = format_findings(results['findings'])
         summary_text = format_summary(results)
         
-        progress_info = f"<div style='color: #059669; font-weight: 500;'>✅ Review completed in <strong>{elapsed_time} seconds</strong> | Files reviewed: {results.get('files_reviewed', 0)} | Findings: {results.get('total_findings', 0)}</div>"
+        progress_info = f"✅ Review completed in **{elapsed_time} seconds** | Files reviewed: {results.get('files_reviewed', 0)} | Findings: {results.get('total_findings', 0)}"
         
         return findings_html, summary_text, progress_info
         
@@ -210,7 +210,7 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
             <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;"><strong>Error:</strong> {error}</p>
         </div>
         """
-        return error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"<div style='color: #dc2626; font-weight: 500;'>❌ Failed after {elapsed_time}s</div>"
+        return error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"❌ Failed after {elapsed_time}s"
 
 def format_findings(findings):
     """Format findings as HTML."""
@@ -290,94 +290,113 @@ def format_summary(results):
 custom_css = """
 .gradio-container {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #f9fafb !important;
+    background: #1e1e2e !important;
+    color: #e4e4e7 !important;
 }
 .main-header {
     text-align: center;
     padding: 32px;
-    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
     border-radius: 16px;
     margin-bottom: 32px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
 }
 /* Tab button styling - unselected */
 button[aria-selected="false"] {
-    background: #ffffff !important;
-    color: #4b5563 !important;
+    background: #27272a !important;
+    color: #a1a1aa !important;
+    border: 1px solid #3f3f46 !important;
 }
 button[aria-selected="false"]:hover {
-    background: #f3f4f6 !important;
-    color: #1f2937 !important;
+    background: #3f3f46 !important;
+    color: #e4e4e7 !important;
 }
 /* Tab button styling - selected */
 button[aria-selected="true"] {
+    background: #6366f1 !important;
+    color: #ffffff !important;
+    border: 1px solid #6366f1 !important;
+}
+button[aria-selected="true"]:hover {
     background: #4f46e5 !important;
     color: #ffffff !important;
 }
-button[aria-selected="true"]:hover {
-    background: #4338ca !important;
-    color: #ffffff !important;
-}
-/* Markdown text styling - comprehensive */
+/* Markdown text styling - dark theme */
 .prose, .markdown, [class*="markdown"] {
-    color: #1f2937 !important;
+    color: #e4e4e7 !important;
 }
 .prose p, .markdown p, [class*="markdown"] p,
 .prose div, .markdown div, [class*="markdown"] div,
 .prose span, .markdown span, [class*="markdown"] span {
-    color: #1f2937 !important;
+    color: #e4e4e7 !important;
 }
 .prose h1, .prose h2, .prose h3, .prose h4,
 .markdown h1, .markdown h2, .markdown h3, .markdown h4,
 [class*="markdown"] h1, [class*="markdown"] h2, [class*="markdown"] h3 {
-    color: #111827 !important;
+    color: #f4f4f5 !important;
 }
 .prose strong, .prose b, .markdown strong, .markdown b,
 [class*="markdown"] strong, [class*="markdown"] b {
-    color: #111827 !important;
+    color: #f4f4f5 !important;
     font-weight: 600 !important;
 }
 .prose code, .markdown code, [class*="markdown"] code {
-    background: #f3f4f6 !important;
-    color: #dc2626 !important;
+    background: #27272a !important;
+    color: #f87171 !important;
     padding: 2px 6px !important;
     border-radius: 4px !important;
 }
 .prose ul, .prose ol, .markdown ul, .markdown ol,
 [class*="markdown"] ul, [class*="markdown"] ol {
-    color: #1f2937 !important;
+    color: #e4e4e7 !important;
 }
 .prose li, .markdown li, [class*="markdown"] li {
-    color: #1f2937 !important;
+    color: #e4e4e7 !important;
 }
-/* Progress display styling */
-.progress-display {
-    color: #1f2937 !important;
+/* Progress display styling - prevent double wrapping and scrollbars */
+.progress-display, .progress-display * {
+    color: #e4e4e7 !important;
     font-weight: 500 !important;
-    padding: 8px 12px !important;
-    background: #f3f4f6 !important;
-    border-radius: 6px !important;
-    border-left: 3px solid #4f46e5 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+    max-height: none !important;
+    line-height: 1.5 !important;
 }
 .progress-display p, .progress-display div, .progress-display span {
-    color: #1f2937 !important;
+    color: #e4e4e7 !important;
+    display: inline !important;
 }
-/* Queue status styling - Gradio's queue indicator */
+/* Queue status styling - dark theme */
 footer, footer *, 
 .gradio-container footer, 
 .gradio-container footer *,
 [class*="footer"] *,
 [class*="status"] *,
 [class*="queue"] * {
-    color: #1f2937 !important;
+    color: #a1a1aa !important;
     background-color: transparent !important;
 }
-/* Force text color for all footer elements */
 footer {
-    color: #1f2937 !important;
+    color: #a1a1aa !important;
 }
 footer span, footer div, footer p, footer a {
-    color: #1f2937 !important;
+    color: #a1a1aa !important;
+}
+/* Form elements dark theme */
+input, textarea, select {
+    background: #27272a !important;
+    color: #e4e4e7 !important;
+    border-color: #3f3f46 !important;
+}
+input:focus, textarea:focus, select:focus {
+    border-color: #6366f1 !important;
+}
+label {
+    color: #d4d4d8 !important;
 }
 """
 
@@ -452,14 +471,14 @@ with gr.Blocks() as demo:
         with gr.Column(scale=2):
             mr_info_display = gr.HTML(
                 label="📋 Merge Request Details",
-                value="<div style='padding: 40px; text-align: center; color: #6b7280; background: #ffffff; border-radius: 12px; border: 2px dashed #e5e7eb;'>Select a project and merge request to view details</div>"
+                value="<div style='padding: 40px; text-align: center; color: #a1a1aa; background: #27272a; border-radius: 12px; border: 2px dashed #3f3f46;'>Select a project and merge request to view details</div>"
             )
             
             with gr.Tabs():
                 with gr.Tab("📊 Review Results"):
                     review_output = gr.HTML(
                         label="Review Findings",
-                        value="<div style='padding: 40px; text-align: center; color: #6b7280; background: #ffffff; border-radius: 12px; border: 2px dashed #e5e7eb;'>Click 'Start AI Review' to begin</div>"
+                        value="<div style='padding: 40px; text-align: center; color: #a1a1aa; background: #27272a; border-radius: 12px; border: 2px dashed #3f3f46;'>Click 'Start AI Review' to begin</div>"
                     )
                 
                 with gr.Tab("📝 Summary"):
@@ -496,7 +515,7 @@ with gr.Blocks() as demo:
         return (
             gr.update(visible=False),  # Hide start button
             gr.update(visible=True),   # Show stop button
-            "<div style='color: #1f2937; font-weight: 500;'>⏱️ Starting review...</div>"    # Progress message
+            "⏱️ Starting review..."    # Progress message
         )
     
     def stop_review():
@@ -505,7 +524,7 @@ with gr.Blocks() as demo:
         return (
             gr.update(visible=True),   # Show start button
             gr.update(visible=False),  # Hide stop button
-            "<div style='color: #dc2626; font-weight: 500;'>⏹️ Stopping review...</div>"    # Progress message
+            "⏹️ Stopping review..."    # Progress message
         )
     
     review_button.click(
