@@ -10,6 +10,7 @@ Your tasks:
 **RETURN ONLY JSON ARRAY WITH THESE FIELDS:**
 - "file": file path
 - "line": line number
+- "line_code": line code
 - "comment": explanation of issue
 - "severity": "low", "medium", "high"
 
@@ -20,12 +21,14 @@ Your tasks:
     "file": "lib/main.dart",
     "line": 42,
     "comment": "Use const constructor instead of regular constructor.",
+    "line_code": "const Button() : super(...);",
     "severity": "low"
   }},
   {{
     "file": "lib/widgets/button.dart",
     "line": 15,
     "comment": "Avoid nested if statements; consider early returns.",
+    "line_code": "if (condition) ....",
     "severity": "medium"
   }}
 ]

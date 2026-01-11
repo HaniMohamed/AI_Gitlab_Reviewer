@@ -7,3 +7,6 @@ python-gitlab>=4.0.0,<5.0.0
 # LangChain for LLM integration
 langchain>=0.1.0,<1.0.0
 langchain-community>=0.0.20,<1.0.0
+
+# Environment variables
+python-dotenv>=1.0.0,<2.0.0

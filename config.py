@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # GitLab
 GITLAB_URL = os.getenv("GITLAB_URL")

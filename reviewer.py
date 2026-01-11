@@ -46,15 +46,18 @@ def review_merge_request(project_id, mr_iid):
 
         # Post inline comments
         for item in findings:
+            # Always use file_path from change (not from LLM response) to ensure correct path
+            # Use the line number from LLM response as-is
+            line_num = item['line']
             post_inline_comment(
                 project_id=project_id,
                 mr_iid=mr_iid,
                 body=f"**{item['severity'].upper()}**: {item['comment']}",
-                file_path=item['file'],
-                new_line=item['line'],   # previously 'line', now 'new_line'
-                old_line=None            # optional, can be None for now
+                file_path=file_path,
+                new_line=line_num,
+                old_line=None
             )
-            summary.append(f"- `{item['file']}:{item['line']}` {item['comment']}")
+            summary.append(f"- `{file_path}:{line_num}` {item['comment']}\n({item.get('line_code', '')})")
 
     if summary:
         post_summary_comment(
