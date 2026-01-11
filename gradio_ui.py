@@ -398,6 +398,55 @@ input:focus, textarea:focus, select:focus {
 label {
     color: #d4d4d8 !important;
 }
+/* Checkbox styling - dark theme */
+input[type="checkbox"],
+input[type="checkbox"]:not([type]),
+[type="checkbox"] {
+    width: 18px !important;
+    height: 18px !important;
+    min-width: 18px !important;
+    min-height: 18px !important;
+    cursor: pointer !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    background: #27272a !important;
+    border: 2px solid #3f3f46 !important;
+    border-radius: 4px !important;
+    position: relative !important;
+    flex-shrink: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+input[type="checkbox"]:checked,
+input[type="checkbox"]:checked:not([type]),
+[type="checkbox"]:checked {
+    background: #6366f1 !important;
+    border-color: #6366f1 !important;
+}
+input[type="checkbox"]:checked::after,
+input[type="checkbox"]:checked:not([type])::after,
+[type="checkbox"]:checked::after {
+    content: "✓" !important;
+    position: absolute !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    color: white !important;
+    font-size: 14px !important;
+    font-weight: bold !important;
+    line-height: 1 !important;
+    display: block !important;
+}
+input[type="checkbox"]:hover,
+[type="checkbox"]:hover {
+    border-color: #6366f1 !important;
+}
+input[type="checkbox"]:focus,
+[type="checkbox"]:focus {
+    outline: 2px solid #6366f1 !important;
+    outline-offset: 2px !important;
+}
 """
 
 # Create Gradio Interface
