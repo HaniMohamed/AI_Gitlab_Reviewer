@@ -69,9 +69,17 @@ def list_projects(search_term=""):
     """List all projects accessible by the user."""
     try:
         if search_term:
+            # Use search parameter for filtered results
             projects = gl.projects.list(search=search_term, all=True)
         else:
-            projects = gl.projects.list(all=True, owned=True)
+            # List all accessible projects (not just owned)
+            # Try membership first, then fall back to all accessible
+            try:
+                projects = gl.projects.list(membership=True, all=True)
+            except:
+                # If membership parameter doesn't work, list all accessible projects
+                projects = gl.projects.list(all=True)
+        
         return [
             {
                 "id": p.id,
@@ -83,6 +91,8 @@ def list_projects(search_term=""):
         ]
     except Exception as e:
         print(f"Error listing projects: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 def list_merge_requests(project_id, state="opened"):

@@ -5,6 +5,30 @@ from config import GITLAB_URL, OLLAMA_MODEL, OLLAMA_BASE_URL
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def index():
+    """Root endpoint with API information."""
+    return {
+        "service": "AI GitLab Code Reviewer API",
+        "version": "1.0.0",
+        "ui": {
+            "gradio": "http://localhost:7860",
+            "description": "Gradio web interface for interactive code review"
+        },
+        "endpoints": {
+            "health": {
+                "path": "/health",
+                "method": "GET",
+                "description": "Health check and configuration information"
+            },
+            "webhook": {
+                "path": "/webhook/gitlab",
+                "method": "POST",
+                "description": "GitLab webhook endpoint for merge request events"
+            }
+        }
+    }
+
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok",
