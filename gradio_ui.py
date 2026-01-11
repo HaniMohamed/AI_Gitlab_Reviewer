@@ -464,7 +464,7 @@ input[type="checkbox"]:focus,
 """
 
 # Create Gradio Interface
-with gr.Blocks() as demo:
+with gr.Blocks(title= "AI-Reviewer") as demo:
     gr.Markdown("""
     <div class="main-header">
         <h1 style="margin: 0; font-size: 2.5em; color: white; font-weight: 700;">
