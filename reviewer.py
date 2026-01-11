@@ -69,10 +69,10 @@ def is_stopped():
     """Check if review should be stopped."""
     return _stop_review_flag.is_set()
 
-def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None):
+def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_name=None):
     """
-    Review a merge request and optionally post comments.
-    Returns review results as a dictionary.
+    Review a merge request and yield results incrementally as a generator.
+    Yields partial results as they're processed.
     
     Args:
         project_id: GitLab project ID
@@ -96,13 +96,15 @@ def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None
     for idx, change in enumerate(diffs):
         # Check if stopped
         if is_stopped():
-            return {
+            yield {
                 'findings': all_findings,
                 'summary': summary,
                 'total_findings': len(all_findings),
                 'files_reviewed': idx,
-                'cancelled': True
+                'cancelled': True,
+                'done': True
             }
+            return
         
         diff_text = change["diff"]
         file_path = change["new_path"]
@@ -140,6 +142,16 @@ def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None
                 )
             
             summary.append(f"- `{file_path}:{line_num}` {item['comment']}\n({item.get('line_code', '')})")
+        
+        # Yield partial results after processing each file
+        yield {
+            'findings': all_findings.copy(),
+            'summary': summary.copy(),
+            'total_findings': len(all_findings),
+            'files_reviewed': idx + 1,
+            'cancelled': False,
+            'done': False
+        }
 
     if post_comments and summary:
         post_summary_comment(
@@ -148,10 +160,38 @@ def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None
             "### 🤖 AI Review Summary\n" + "\n".join(summary)
         )
     
-    return {
+    # Final yield with done=True
+    yield {
         'findings': all_findings,
         'summary': summary,
         'total_findings': len(all_findings),
         'files_reviewed': len(diffs),
+        'cancelled': False,
+        'done': True
+    }
+
+def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None):
+    """
+    Review a merge request and optionally post comments.
+    Returns review results as a dictionary.
+    
+    Args:
+        project_id: GitLab project ID
+        mr_iid: Merge request IID
+        post_comments: Whether to post comments to GitLab
+        model_name: Optional model name to use for this review
+    """
+    # Use the streaming version and get the final result
+    for result in review_merge_request_stream(project_id, mr_iid, post_comments, model_name):
+        if result.get('done', False):
+            # Remove 'done' key before returning
+            result.pop('done', None)
+            return result
+    # Fallback (shouldn't reach here)
+    return {
+        'findings': [],
+        'summary': [],
+        'total_findings': 0,
+        'files_reviewed': 0,
         'cancelled': False
     }

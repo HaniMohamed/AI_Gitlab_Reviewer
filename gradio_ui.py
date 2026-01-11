@@ -1,6 +1,6 @@
 import gradio as gr
-from gitlab_client import list_projects, list_merge_requests, get_mr
-from reviewer import review_merge_request, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
+from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs
+from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
 from config import GITLAB_URL, OLLAMA_BASE_URL, OLLAMA_MODEL
 import time
 from datetime import datetime
@@ -64,7 +64,7 @@ def create_mr_info_display(mr):
     
     labels_html = ""
     if mr.get('labels'):
-            labels_html = f"""
+        labels_html = f"""
         <div style="margin-top: 10px;">
             <strong style="color: rgba(255,255,255,0.95);">Labels:</strong>
             {', '.join([f'<span style="background: #3b82f6; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85em; margin-right: 6px; display: inline-block; margin-top: 4px; border: 1px solid rgba(255,255,255,0.2);">{label}</span>' for label in mr['labels'][:5]])}
@@ -159,7 +159,7 @@ def create_env_info_display():
     """
 
 def run_review(project_selection, mr_selection, post_comments, model_name, progress=gr.Progress()):
-    """Run the AI review on selected MR with progress tracking."""
+    """Run the AI review on selected MR with streaming results."""
     if not project_selection or not mr_selection:
         error_html = """
         <div style="padding: 24px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
@@ -167,7 +167,8 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
             <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Please select a project and merge request first.</p>
         </div>
         """
-        return error_html, "❌ Please select a project and merge request first.", ""
+        yield error_html, "❌ Please select a project and merge request first.", ""
+        return
     
     # Reset stop flag
     reset_stop_flag()
@@ -178,28 +179,41 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
         project_id = int(project_selection.split("(ID: ")[1].split(")")[0])
         mr_iid = int(mr_selection.split("!")[1].split(":")[0])
         
-        # Perform the review (progress tracking happens in Gradio's loading state)
-        results = review_merge_request(project_id, mr_iid, post_comments=post_comments, model_name=model_name)
+        # Get total files count for progress
+        total_files = len(get_mr_diffs(project_id, mr_iid))
         
-        elapsed_time = int(time.time() - start_time)
+        # Stream results as they come in
+        for results in review_merge_request_stream(project_id, mr_iid, post_comments=post_comments, model_name=model_name):
+            elapsed_time = int(time.time() - start_time)
+            
+            # Check if cancelled
+            if results.get('cancelled', False):
+                cancelled_html = f"""
+                <div style="padding: 24px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                    <h3 style="margin-top: 0; color: white; font-weight: 600;">⚠️ Review Cancelled</h3>
+                    <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Review was cancelled. {results.get('files_reviewed', 0)} file(s) were processed before cancellation.</p>
+                </div>
+                """
+                progress_info = f"⏹️ Cancelled after {elapsed_time}s"
+                yield cancelled_html, f"⚠️ Review cancelled after {elapsed_time}s. {results.get('files_reviewed', 0)} file(s) processed.", progress_info
+                return
+            
+            # Format current findings
+            findings_html = format_findings(results['findings'])
+            summary_text = format_summary(results)
         
-        # Check if cancelled
-        if results.get('cancelled', False):
-            cancelled_html = f"""
-            <div style="padding: 24px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-                <h3 style="margin-top: 0; color: white; font-weight: 600;">⚠️ Review Cancelled</h3>
-                <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Review was cancelled. {results.get('files_reviewed', 0)} file(s) were processed before cancellation.</p>
-            </div>
-            """
-            return cancelled_html, f"⚠️ Review cancelled after {elapsed_time}s. {results.get('files_reviewed', 0)} file(s) processed.", f"⏹️ Cancelled after {elapsed_time}s"
-        
-        # Format results
-        findings_html = format_findings(results['findings'])
-        summary_text = format_summary(results)
-        
-        progress_info = f"✅ Review completed in **{elapsed_time} seconds** | Files reviewed: {results.get('files_reviewed', 0)} | Findings: {results.get('total_findings', 0)}"
-        
-        return findings_html, summary_text, progress_info
+            # Update progress info
+            if results.get('done', False):
+                progress_info = f"✅ Review completed in **{elapsed_time} seconds** | Files reviewed: {results.get('files_reviewed', 0)} | Findings: {results.get('total_findings', 0)}"
+            else:
+                progress_info = f"⏱️ Processing... ({elapsed_time}s) | Files: {results.get('files_reviewed', 0)}/{total_files} | Findings: {results.get('total_findings', 0)}"
+            
+            # Yield incremental results
+            yield findings_html, summary_text, progress_info
+            
+            # If done, break
+            if results.get('done', False):
+                break
         
     except Exception as e:
         error = str(e)
@@ -210,7 +224,7 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
             <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;"><strong>Error:</strong> {error}</p>
         </div>
         """
-        return error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"❌ Failed after {elapsed_time}s"
+        yield error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"❌ Failed after {elapsed_time}s"
 
 def format_findings(findings):
     """Format findings as HTML."""
@@ -574,7 +588,7 @@ with gr.Blocks() as demo:
             gr.update(visible=True),   # Show start button
             gr.update(visible=False),  # Hide stop button
             "⏹️ Stopping review..."    # Progress message
-        )
+    )
     
     review_button.click(
         start_review,
