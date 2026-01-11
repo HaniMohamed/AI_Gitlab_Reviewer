@@ -10,3 +10,9 @@ langchain-community>=0.0.20,<1.0.0
 
 # Environment variables
 python-dotenv>=1.0.0,<2.0.0
+
+# UI Framework
+gradio>=6.0.0,<7.0.0
+
+# Python 3.13 compatibility (audioop was removed from stdlib)
+audioop-lts>=0.2.2

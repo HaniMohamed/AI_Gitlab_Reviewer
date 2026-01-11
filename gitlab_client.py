@@ -64,3 +64,62 @@ def post_inline_comment(project_id, mr_iid, body, file_path, new_line, old_line=
 def post_summary_comment(project_id, mr_iid, body):
     mr = get_mr(project_id, mr_iid)
     mr.notes.create({"body": body})
+
+def list_projects(search_term=""):
+    """List all projects accessible by the user."""
+    try:
+        if search_term:
+            projects = gl.projects.list(search=search_term, all=True)
+        else:
+            projects = gl.projects.list(all=True, owned=True)
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "path_with_namespace": p.path_with_namespace,
+                "web_url": p.web_url
+            }
+            for p in projects
+        ]
+    except Exception as e:
+        print(f"Error listing projects: {e}")
+        return []
+
+def list_merge_requests(project_id, state="opened"):
+    """List merge requests for a project."""
+    try:
+        project = gl.projects.get(project_id)
+        mrs = project.mergerequests.list(state=state, all=True)
+        result = []
+        for mr in mrs:
+            # Handle author attribute (might be dict or object)
+            author_name = "Unknown"
+            author_username = ""
+            if hasattr(mr, "author"):
+                if isinstance(mr.author, dict):
+                    author_name = mr.author.get("name", "Unknown")
+                    author_username = mr.author.get("username", "")
+                else:
+                    author_name = getattr(mr.author, "name", "Unknown")
+                    author_username = getattr(mr.author, "username", "")
+            
+            result.append({
+                "iid": mr.iid,
+                "title": mr.title,
+                "source_branch": mr.source_branch,
+                "target_branch": mr.target_branch,
+                "author": author_name,
+                "author_username": author_username,
+                "created_at": mr.created_at,
+                "updated_at": mr.updated_at,
+                "web_url": mr.web_url,
+                "state": mr.state,
+                "draft": getattr(mr, "draft", False),
+                "labels": getattr(mr, "labels", []),
+                "merge_status": getattr(mr, "merge_status", "unknown"),
+                "description": (getattr(mr, "description", "") or "")[:200]  # First 200 chars
+            })
+        return result
+    except Exception as e:
+        print(f"Error listing MRs: {e}")
+        return []
