@@ -1,12 +1,18 @@
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import Ollama
-from config import OLLAMA_MODEL
+from config import OLLAMA_MODEL, OLLAMA_BASE_URL
 from prompts import CODE_REVIEW_PROMPT
 from gitlab_client import get_mr_diffs, post_inline_comment, post_summary_comment
 import json
 import re
+import requests
+import threading
 
-llm = Ollama(model=OLLAMA_MODEL)
+# Global LLM instance (will be updated when model changes)
+llm = Ollama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+
+# Global stop flag for cancellation
+_stop_review_flag = threading.Event()
 
 prompt = PromptTemplate(
     template=CODE_REVIEW_PROMPT,
@@ -26,16 +32,78 @@ def parse_llm_output(text: str):
         print("No JSON found")
         return []
 
-def review_merge_request(project_id, mr_iid, post_comments=True):
+def get_available_models():
+    """Get list of available Ollama models."""
+    try:
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        if response.status_code == 200:
+            models_data = response.json()
+            models = [model["name"] for model in models_data.get("models", [])]
+            return models
+        return []
+    except Exception as e:
+        print(f"Error fetching Ollama models: {e}")
+        return []
+
+def set_model(model_name):
+    """Update the global LLM instance with a new model."""
+    global llm
+    llm = Ollama(model=model_name, base_url=OLLAMA_BASE_URL)
+    return f"Model switched to: {model_name}"
+
+def get_current_model():
+    """Get the current model name."""
+    return llm.model if hasattr(llm, 'model') else OLLAMA_MODEL
+
+def reset_stop_flag():
+    """Reset the stop flag for a new review."""
+    global _stop_review_flag
+    _stop_review_flag.clear()
+
+def set_stop_flag():
+    """Set the stop flag to cancel current review."""
+    global _stop_review_flag
+    _stop_review_flag.set()
+
+def is_stopped():
+    """Check if review should be stopped."""
+    return _stop_review_flag.is_set()
+
+def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None):
     """
     Review a merge request and optionally post comments.
     Returns review results as a dictionary.
+    
+    Args:
+        project_id: GitLab project ID
+        mr_iid: Merge request IID
+        post_comments: Whether to post comments to GitLab
+        model_name: Optional model name to use for this review
     """
+    # Use specified model or current global model
+    if model_name:
+        review_llm = Ollama(model=model_name, base_url=OLLAMA_BASE_URL)
+    else:
+        review_llm = llm
+    
+    # Reset stop flag at start
+    reset_stop_flag()
+    
     diffs = get_mr_diffs(project_id, mr_iid)
     all_findings = []
     summary = []
 
-    for change in diffs:
+    for idx, change in enumerate(diffs):
+        # Check if stopped
+        if is_stopped():
+            return {
+                'findings': all_findings,
+                'summary': summary,
+                'total_findings': len(all_findings),
+                'files_reviewed': idx,
+                'cancelled': True
+            }
+        
         diff_text = change["diff"]
         file_path = change["new_path"]
 
@@ -43,7 +111,7 @@ def review_merge_request(project_id, mr_iid, post_comments=True):
         formatted_prompt = prompt.format(diff=diff_text)
 
         # Call the LLM
-        response = llm(formatted_prompt)
+        response = review_llm(formatted_prompt)
         print("Raw LLM output:", response)
 
         # Parse JSON safely
@@ -84,5 +152,6 @@ def review_merge_request(project_id, mr_iid, post_comments=True):
         'findings': all_findings,
         'summary': summary,
         'total_findings': len(all_findings),
-        'files_reviewed': len(diffs)
+        'files_reviewed': len(diffs),
+        'cancelled': False
     }

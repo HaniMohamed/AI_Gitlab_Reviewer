@@ -11,6 +11,9 @@ langchain-community>=0.0.20,<1.0.0
 # Environment variables
 python-dotenv>=1.0.0,<2.0.0
 
+# HTTP requests
+requests>=2.31.0
+
 # UI Framework
 gradio>=6.0.0,<7.0.0
 
