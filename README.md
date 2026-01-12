@@ -239,5 +239,7 @@ You can inspect `sample_mr_payload.json` in the repo for a minimal example paylo
 
 ## License
 
-Add your preferred license here (for example, MIT). Once chosen, include a `LICENSE` file in the repository and reference it here.
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2026 Hani Hussein
 
