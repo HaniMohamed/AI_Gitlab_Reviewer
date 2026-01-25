@@ -3,6 +3,7 @@ RAG (Retrieval-Augmented Generation) system for code review.
 Handles document loading, vectorization, and retrieval of project guidelines.
 """
 import os
+import json
 from pathlib import Path
 from typing import List, Optional
 from langchain_community.document_loaders import (
@@ -16,6 +17,7 @@ from config import OLLAMA_BASE_URL
 
 # Default vector store path
 VECTOR_STORE_PATH = "./vector_store"
+REPO_METADATA_FILE = os.path.join(VECTOR_STORE_PATH, "repo_metadata.json")
 
 def get_embeddings():
     """Get Ollama embeddings instance."""
@@ -82,12 +84,13 @@ def split_documents(documents: List, chunk_size: int = 1000, chunk_overlap: int 
     )
     return text_splitter.split_documents(documents)
 
-def create_vector_store(data_folder: str, vector_store_path: str = VECTOR_STORE_PATH) -> str:
+def create_vector_store(data_folder: str, repo_name: str, vector_store_path: str = VECTOR_STORE_PATH) -> str:
     """
     Create vector store from documents in data folder.
     
     Args:
         data_folder: Path to folder containing documents
+        repo_name: Repository name (path_with_namespace) to associate with this vector store
         vector_store_path: Path where vector store will be saved
         
     Returns:
@@ -112,14 +115,26 @@ def create_vector_store(data_folder: str, vector_store_path: str = VECTOR_STORE_
         import shutil
         shutil.rmtree(vector_store_path)
     
+    # Create directory if it doesn't exist
+    os.makedirs(vector_store_path, exist_ok=True)
+    
     vector_store = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
         persist_directory=vector_store_path
     )
     
-    print(f"Vector store created at {vector_store_path}")
-    return f"✅ Successfully created vector store with {len(chunks)} chunks from {len(documents)} documents"
+    # Store repository metadata
+    metadata = {
+        "repo_name": repo_name,
+        "created_at": str(Path().cwd())  # Store creation context
+    }
+    metadata_file = os.path.join(vector_store_path, "repo_metadata.json")
+    with open(metadata_file, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    print(f"Vector store created at {vector_store_path} for repository: {repo_name}")
+    return f"✅ Successfully created vector store with {len(chunks)} chunks from {len(documents)} documents for repository: {repo_name}"
 
 def load_vector_store(vector_store_path: str = VECTOR_STORE_PATH) -> Optional[Chroma]:
     """
@@ -179,3 +194,45 @@ def is_vector_store_available(vector_store_path: str = VECTOR_STORE_PATH) -> boo
         True if vector store is available
     """
     return os.path.exists(vector_store_path) and os.path.isdir(vector_store_path)
+
+def get_stored_repo_name(vector_store_path: str = VECTOR_STORE_PATH) -> Optional[str]:
+    """
+    Get the repository name stored in the vector store metadata.
+    
+    Args:
+        vector_store_path: Path to vector store
+        
+    Returns:
+        Repository name (path_with_namespace) or None if not found
+    """
+    metadata_file = os.path.join(vector_store_path, "repo_metadata.json")
+    if not os.path.exists(metadata_file):
+        return None
+    
+    try:
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+            return metadata.get("repo_name")
+    except Exception as e:
+        print(f"Error reading repository metadata: {e}")
+        return None
+
+def is_repo_match(current_repo_name: str, vector_store_path: str = VECTOR_STORE_PATH) -> bool:
+    """
+    Check if the current repository matches the stored repository in vector store.
+    
+    Args:
+        current_repo_name: Current repository name (path_with_namespace)
+        vector_store_path: Path to vector store
+        
+    Returns:
+        True if repository matches, False otherwise
+    """
+    if not is_vector_store_available(vector_store_path):
+        return False
+    
+    stored_repo = get_stored_repo_name(vector_store_path)
+    if stored_repo is None:
+        return False
+    
+    return stored_repo == current_repo_name

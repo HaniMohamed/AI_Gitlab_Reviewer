@@ -2,7 +2,7 @@ import gradio as gr
 from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs
 from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
 from config import GITLAB_URL, OLLAMA_BASE_URL, OLLAMA_MODEL
-from rag_system import create_vector_store, is_vector_store_available
+from rag_system import create_vector_store, is_vector_store_available, is_repo_match, get_stored_repo_name
 import time
 from datetime import datetime
 import threading
@@ -514,10 +514,53 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                 value=True
             )
             
+            def get_rag_checkbox_state(project_selection=None):
+                """Get RAG checkbox state based on vector store availability and repository match."""
+                if not is_vector_store_available():
+                    return (
+                        gr.update(interactive=False, value=False),
+                        gr.update(visible=True, value="ℹ️ **RAG not available:** No vector database found. Please create one in the 'Vectorize Data' tab first.")
+                    )
+                
+                # Check if repository matches
+                if project_selection:
+                    try:
+                        # Extract repo name from project selection (format: "path/with/namespace (ID: 123)")
+                        repo_name = project_selection.split(" (ID:")[0]
+                        if is_repo_match(repo_name):
+                            return (
+                                gr.update(interactive=True, value=False),
+                                gr.update(visible=False, value="")
+                            )
+                        else:
+                            stored_repo = get_stored_repo_name()
+                            return (
+                                gr.update(interactive=False, value=False),
+                                gr.update(visible=True, value=f"ℹ️ **RAG not available:** Vector database is for repository '{stored_repo}', but current repository is '{repo_name}'. Please create a vector store for this repository.")
+                            )
+                    except Exception as e:
+                        print(f"Error checking repository match: {e}")
+                
+                # If no project selected, check if vector store exists
+                stored_repo = get_stored_repo_name()
+                if stored_repo:
+                    return (
+                        gr.update(interactive=False, value=False),
+                        gr.update(visible=True, value=f"ℹ️ **RAG not available:** Vector database exists for repository '{stored_repo}'. Please select that repository to use RAG.")
+                    )
+                else:
+                    return (
+                        gr.update(interactive=False, value=False),
+                        gr.update(visible=True, value="ℹ️ **RAG not available:** Please select a repository first.")
+                    )
+            
             use_rag_checkbox = gr.Checkbox(
                 label="🧠 Use RAG (Retrieval-Augmented Generation) - Check against project guidelines",
-                value=False
+                value=False,
+                interactive=False
             )
+            
+            rag_status_message = gr.Markdown("", visible=False)
             
             with gr.Row():
                 review_button = gr.Button(
@@ -572,10 +615,12 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                     gr.Markdown("""
                     <div style="padding: 20px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border-radius: 12px; color: white; margin-bottom: 20px;">
                         <h2 style="margin: 0 0 10px 0; color: white;">📚 Vectorize Project Guidelines</h2>
-                        <p style="margin: 0; color: rgba(255,255,255,0.95);">Select a folder containing your project guidelines documents (.txt, .md, .pdf files). 
-                        This will create a vector database that the AI reviewer can use to check code against your project guidelines.</p>
+                        <p style="margin: 0; color: rgba(255,255,255,0.95);">Select a repository and folder containing your project guidelines documents (.txt, .md, .pdf files). 
+                        This will create a vector database associated with the selected repository that the AI reviewer can use to check code against your project guidelines.</p>
                     </div>
                     """)
+                    
+                    vectorize_project_info = gr.Markdown("ℹ️ **Please select a repository first** from the project dropdown above to associate the vector database with it.")
                     
                     data_folder_input = gr.Textbox(
                         label="📁 Data Folder Path",
@@ -590,29 +635,80 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                         variant="primary"
                     )
                     
-                    def vectorize_data(data_folder):
+                    def vectorize_data(data_folder, project_selection):
                         """Vectorize documents from the selected folder."""
+                        if not project_selection:
+                            return (
+                                "❌ Please select a repository first from the project dropdown above.",
+                                gr.update(interactive=False, value=False),
+                                gr.update(visible=True, value="ℹ️ **RAG not available:** No vector database found. Please create one in the 'Vectorize Data' tab first.")
+                            )
+                        
                         if not data_folder or not data_folder.strip():
-                            return "❌ Please provide a data folder path."
+                            return (
+                                "❌ Please provide a data folder path.",
+                                gr.update(interactive=False, value=False),
+                                gr.update(visible=True, value="ℹ️ **RAG not available:** No vector database found. Please create one in the 'Vectorize Data' tab first.")
+                            )
                         
                         data_folder = data_folder.strip()
                         
                         if not os.path.exists(data_folder):
-                            return f"❌ Folder does not exist: {data_folder}"
+                            return (
+                                f"❌ Folder does not exist: {data_folder}",
+                                gr.update(interactive=False, value=False),
+                                gr.update(visible=True, value="ℹ️ **RAG not available:** No vector database found. Please create one in the 'Vectorize Data' tab first.")
+                            )
                         
                         if not os.path.isdir(data_folder):
-                            return f"❌ Path is not a directory: {data_folder}"
+                            return (
+                                f"❌ Path is not a directory: {data_folder}",
+                                gr.update(interactive=False, value=False),
+                                gr.update(visible=True, value="ℹ️ **RAG not available:** No vector database found. Please create one in the 'Vectorize Data' tab first.")
+                            )
                         
                         try:
-                            result = create_vector_store(data_folder)
-                            return f"✅ {result}"
+                            # Extract repo name from project selection (format: "path/with/namespace (ID: 123)")
+                            repo_name = project_selection.split(" (ID:")[0]
+                            result = create_vector_store(data_folder, repo_name)
+                            # Update RAG checkbox state after creation
+                            checkbox_state, message_state = get_rag_checkbox_state(project_selection)
+                            return (
+                                f"✅ {result}",
+                                checkbox_state,
+                                message_state
+                            )
                         except Exception as e:
-                            return f"❌ Error creating vector store: {str(e)}"
+                            return (
+                                f"❌ Error creating vector store: {str(e)}",
+                                gr.update(interactive=False, value=False),
+                                gr.update(visible=True, value="ℹ️ **RAG not available:** No vector database found. Please create one in the 'Vectorize Data' tab first.")
+                            )
                     
                     vectorize_button.click(
                         vectorize_data,
-                        inputs=[data_folder_input],
-                        outputs=[vectorize_status]
+                        inputs=[data_folder_input, project_dropdown],
+                        outputs=[vectorize_status, use_rag_checkbox, rag_status_message]
+                    )
+                    
+                    def update_vectorize_info(project_selection):
+                        """Update vectorize info based on project selection."""
+                        if project_selection:
+                            repo_name = project_selection.split(" (ID:")[0]
+                            stored_repo = get_stored_repo_name()
+                            if stored_repo and stored_repo == repo_name:
+                                return f"✅ **Repository selected:** {repo_name}<br>✅ Vector database exists for this repository. You can create a new one to replace it."
+                            elif stored_repo:
+                                return f"ℹ️ **Repository selected:** {repo_name}<br>⚠️ Vector database exists for different repository: '{stored_repo}'. Creating a new one will replace it."
+                            else:
+                                return f"✅ **Repository selected:** {repo_name}<br>Ready to create vector database for this repository."
+                        else:
+                            return "ℹ️ **Please select a repository first** from the project dropdown above to associate the vector database with it."
+                    
+                    project_dropdown.change(
+                        update_vectorize_info,
+                        inputs=[project_dropdown],
+                        outputs=[vectorize_project_info]
                     )
                     
                     # Check vector store status
@@ -624,10 +720,17 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                     
                     vector_store_status = gr.Markdown(value=check_vector_store_status())
                     
+                    def refresh_all_status(project_selection):
+                        """Refresh both vector store status and RAG checkbox state."""
+                        status = check_vector_store_status()
+                        checkbox_state, message_state = get_rag_checkbox_state(project_selection)
+                        return status, checkbox_state, message_state
+                    
                     refresh_status_button = gr.Button("🔄 Refresh Status", size="sm")
                     refresh_status_button.click(
-                        lambda: check_vector_store_status(),
-                        outputs=[vector_store_status]
+                        refresh_all_status,
+                        inputs=[project_dropdown],
+                        outputs=[vector_store_status, use_rag_checkbox, rag_status_message]
                     )
     
     # Hidden state variables
@@ -641,10 +744,22 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
         outputs=[project_dropdown, project_status]
     )
     
+    def on_project_change(project_selection):
+        """Handle project change - load MRs and update RAG checkbox state."""
+        mr_result = load_merge_requests(project_selection)
+        rag_checkbox_state, rag_message_state = get_rag_checkbox_state(project_selection)
+        return (
+            mr_result[0],  # mr_dropdown
+            mr_result[1],  # mr_info_display
+            mr_result[2],  # project_id_state
+            rag_checkbox_state,  # use_rag_checkbox
+            rag_message_state  # rag_status_message
+        )
+    
     project_dropdown.change(
-        load_merge_requests,
+        on_project_change,
         inputs=[project_dropdown],
-        outputs=[mr_dropdown, mr_info_display, project_id_state]
+        outputs=[mr_dropdown, mr_info_display, project_id_state, use_rag_checkbox, rag_status_message]
     )
     
     mr_dropdown.change(
@@ -728,6 +843,11 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
         load_available_models,
         inputs=[],
         outputs=[model_dropdown, model_status]
+    )
+    demo.load(
+        lambda: get_rag_checkbox_state(None),
+        inputs=[],
+        outputs=[use_rag_checkbox, rag_status_message]
     )
 
 if __name__ == "__main__":
