@@ -2,9 +2,11 @@ import gradio as gr
 from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs
 from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
 from config import GITLAB_URL, OLLAMA_BASE_URL, OLLAMA_MODEL
+from rag_system import create_vector_store, is_vector_store_available
 import time
 from datetime import datetime
 import threading
+import os
 
 def load_projects(search_term=""):
     """Load projects from GitLab."""
@@ -158,7 +160,7 @@ def create_env_info_display():
     </div>
     """
 
-def run_review(project_selection, mr_selection, post_comments, model_name, progress=gr.Progress()):
+def run_review(project_selection, mr_selection, post_comments, model_name, use_rag, progress=gr.Progress()):
     """Run the AI review on selected MR with streaming results."""
     if not project_selection or not mr_selection:
         error_html = """
@@ -168,6 +170,17 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
         </div>
         """
         yield error_html, "❌ Please select a project and merge request first.", ""
+        return
+    
+    # Check RAG availability if enabled
+    if use_rag and not is_vector_store_available():
+        error_html = """
+        <div style="padding: 24px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+            <h3 style="margin-top: 0; color: white; font-weight: 600;">⚠️ RAG Not Available</h3>
+            <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">RAG is enabled but vector store is not available. Please create a vector store first in the "Vectorize Data" tab.</p>
+        </div>
+        """
+        yield error_html, "⚠️ RAG enabled but vector store not available. Please create vector store first.", ""
         return
     
     # Reset stop flag
@@ -183,7 +196,7 @@ def run_review(project_selection, mr_selection, post_comments, model_name, progr
         total_files = len(get_mr_diffs(project_id, mr_iid))
         
         # Stream results as they come in
-        for results in review_merge_request_stream(project_id, mr_iid, post_comments=post_comments, model_name=model_name):
+        for results in review_merge_request_stream(project_id, mr_iid, post_comments=post_comments, model_name=model_name, use_rag=use_rag):
             elapsed_time = int(time.time() - start_time)
             
             # Check if cancelled
@@ -501,6 +514,11 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                 value=True
             )
             
+            use_rag_checkbox = gr.Checkbox(
+                label="🧠 Use RAG (Retrieval-Augmented Generation) - Check against project guidelines",
+                value=False
+            )
+            
             with gr.Row():
                 review_button = gr.Button(
                     "🚀 Start AI Review",
@@ -549,6 +567,68 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                         label="Review Summary",
                         value="No review completed yet."
                     )
+                
+                with gr.Tab("🔍 Vectorize Data"):
+                    gr.Markdown("""
+                    <div style="padding: 20px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border-radius: 12px; color: white; margin-bottom: 20px;">
+                        <h2 style="margin: 0 0 10px 0; color: white;">📚 Vectorize Project Guidelines</h2>
+                        <p style="margin: 0; color: rgba(255,255,255,0.95);">Select a folder containing your project guidelines documents (.txt, .md, .pdf files). 
+                        This will create a vector database that the AI reviewer can use to check code against your project guidelines.</p>
+                    </div>
+                    """)
+                    
+                    data_folder_input = gr.Textbox(
+                        label="📁 Data Folder Path",
+                        placeholder="Enter the full path to your project guidelines folder",
+                        interactive=True
+                    )
+                    
+                    vectorize_status = gr.Markdown("")
+                    
+                    vectorize_button = gr.Button(
+                        "🚀 Create Vector Store",
+                        variant="primary"
+                    )
+                    
+                    def vectorize_data(data_folder):
+                        """Vectorize documents from the selected folder."""
+                        if not data_folder or not data_folder.strip():
+                            return "❌ Please provide a data folder path."
+                        
+                        data_folder = data_folder.strip()
+                        
+                        if not os.path.exists(data_folder):
+                            return f"❌ Folder does not exist: {data_folder}"
+                        
+                        if not os.path.isdir(data_folder):
+                            return f"❌ Path is not a directory: {data_folder}"
+                        
+                        try:
+                            result = create_vector_store(data_folder)
+                            return f"✅ {result}"
+                        except Exception as e:
+                            return f"❌ Error creating vector store: {str(e)}"
+                    
+                    vectorize_button.click(
+                        vectorize_data,
+                        inputs=[data_folder_input],
+                        outputs=[vectorize_status]
+                    )
+                    
+                    # Check vector store status
+                    def check_vector_store_status():
+                        if is_vector_store_available():
+                            return "✅ Vector store is available and ready to use."
+                        else:
+                            return "ℹ️ No vector store found. Please create one using the form above."
+                    
+                    vector_store_status = gr.Markdown(value=check_vector_store_status())
+                    
+                    refresh_status_button = gr.Button("🔄 Refresh Status", size="sm")
+                    refresh_status_button.click(
+                        lambda: check_vector_store_status(),
+                        outputs=[vector_store_status]
+                    )
     
     # Hidden state variables
     project_id_state = gr.State(value=None)
@@ -573,7 +653,7 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
         outputs=[mr_info_display, project_id_state, mr_iid_state]
     )
     
-    def start_review(project, mr, post_comments, model):
+    def start_review(project, mr, post_comments, model, use_rag):
         """Start review and show stop button."""
         return (
             gr.update(visible=False),  # Hide start button
@@ -592,11 +672,11 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
     
     review_button.click(
         start_review,
-        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_dropdown],
+        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_dropdown, use_rag_checkbox],
         outputs=[review_button, stop_button, progress_display]
     ).then(
         run_review,
-        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_dropdown],
+        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_dropdown, use_rag_checkbox],
         outputs=[review_output, summary_output, progress_display]
     ).then(
         lambda: (

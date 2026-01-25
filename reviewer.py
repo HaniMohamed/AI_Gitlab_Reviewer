@@ -1,8 +1,9 @@
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import Ollama
 from config import OLLAMA_MODEL, OLLAMA_BASE_URL
-from prompts import CODE_REVIEW_PROMPT
+from prompts import CODE_REVIEW_PROMPT, CODE_REVIEW_PROMPT_WITH_RAG
 from gitlab_client import get_mr_diffs, post_inline_comment, post_summary_comment
+from rag_system import load_vector_store, retrieve_relevant_context, is_vector_store_available
 import json
 import re
 import requests
@@ -17,6 +18,11 @@ _stop_review_flag = threading.Event()
 prompt = PromptTemplate(
     template=CODE_REVIEW_PROMPT,
     input_variables=["diff"]
+)
+
+prompt_with_rag = PromptTemplate(
+    template=CODE_REVIEW_PROMPT_WITH_RAG,
+    input_variables=["diff", "guidelines"]
 )
 
 def parse_llm_output(text: str):
@@ -69,7 +75,7 @@ def is_stopped():
     """Check if review should be stopped."""
     return _stop_review_flag.is_set()
 
-def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_name=None):
+def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False):
     """
     Review a merge request and yield results incrementally as a generator.
     Yields partial results as they're processed.
@@ -79,12 +85,25 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         mr_iid: Merge request IID
         post_comments: Whether to post comments to GitLab
         model_name: Optional model name to use for this review
+        use_rag: Whether to use RAG for augmented prompts with project guidelines
     """
     # Use specified model or current global model
     if model_name:
         review_llm = Ollama(model=model_name, base_url=OLLAMA_BASE_URL)
     else:
         review_llm = llm
+    
+    # Load vector store if RAG is enabled
+    vector_store = None
+    if use_rag:
+        if is_vector_store_available():
+            vector_store = load_vector_store()
+            if vector_store is None:
+                print("⚠️ RAG enabled but vector store not available. Continuing without RAG.")
+                use_rag = False
+        else:
+            print("⚠️ RAG enabled but vector store not available. Continuing without RAG.")
+            use_rag = False
     
     # Reset stop flag at start
     reset_stop_flag()
@@ -110,7 +129,16 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         file_path = change["new_path"]
 
         # Format the prompt correctly
-        formatted_prompt = prompt.format(diff=diff_text)
+        if use_rag and vector_store:
+            # Retrieve relevant guidelines for this diff
+            guidelines = retrieve_relevant_context(diff_text, vector_store, k=3)
+            if guidelines:
+                formatted_prompt = prompt_with_rag.format(diff=diff_text, guidelines=guidelines)
+            else:
+                # Fallback to regular prompt if no guidelines found
+                formatted_prompt = prompt.format(diff=diff_text)
+        else:
+            formatted_prompt = prompt.format(diff=diff_text)
 
         # Call the LLM
         response = review_llm(formatted_prompt)
@@ -170,7 +198,7 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         'done': True
     }
 
-def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None):
+def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False):
     """
     Review a merge request and optionally post comments.
     Returns review results as a dictionary.
@@ -180,9 +208,10 @@ def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None
         mr_iid: Merge request IID
         post_comments: Whether to post comments to GitLab
         model_name: Optional model name to use for this review
+        use_rag: Whether to use RAG for augmented prompts with project guidelines
     """
     # Use the streaming version and get the final result
-    for result in review_merge_request_stream(project_id, mr_iid, post_comments, model_name):
+    for result in review_merge_request_stream(project_id, mr_iid, post_comments, model_name, use_rag):
         if result.get('done', False):
             # Remove 'done' key before returning
             result.pop('done', None)
