@@ -1,6 +1,7 @@
 import gradio as gr
 from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs
 from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
+from models import ModelProvider, get_llm
 from config import GITLAB_URL, OLLAMA_BASE_URL, OLLAMA_MODEL
 from rag_system import create_vector_store, is_vector_store_available, is_repo_match, get_stored_repo_name
 import time
@@ -129,17 +130,27 @@ def load_available_models():
         models.insert(0, current)
     return gr.update(choices=models, value=current), f"✅ Found {len(models)} model(s)"
 
-def switch_model(selected_model):
+def switch_model(provider, model_name, api_endpoint=None, api_key=None):
     """Switch to the selected model."""
     try:
-        set_model(selected_model)
-        return f"✅ Model switched to: {selected_model}"
+        set_model(
+            model_name=model_name,
+            provider=provider,
+            api_key=api_key if provider == ModelProvider.API else None,
+            api_endpoint=api_endpoint if provider == ModelProvider.API else None
+        )
+        provider_name = "Ollama" if provider == ModelProvider.OLLAMA else "API"
+        return f"✅ Model switched to: {model_name} ({provider_name})"
     except Exception as e:
         return f"❌ Error switching model: {str(e)}"
 
 def create_env_info_display():
     """Create HTML display for environment information."""
-    current_model = get_current_model()
+    current_llm = get_llm()
+    model_info = current_llm.get_model_info()
+    current_model = model_info.get("model", OLLAMA_MODEL)
+    provider = model_info.get("provider", "Ollama")
+    
     return f"""
     <div style="background: linear-gradient(135deg, #27272a 0%, #18181b 100%); padding: 20px; border-radius: 12px; border: 1px solid #3f3f46;">
         <h3 style="margin: 0 0 16px 0; color: #f4f4f5; font-size: 1.1em; font-weight: 600;">⚙️ Environment Configuration</h3>
@@ -149,18 +160,21 @@ def create_env_info_display():
                 <code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{GITLAB_URL}</code>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
-                <strong style="color: #d4d4d8;">Ollama Base URL:</strong>
-                <code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{OLLAMA_BASE_URL}</code>
+                <strong style="color: #d4d4d8;">Provider:</strong>
+                <code style="background: #312e81; padding: 4px 8px; border-radius: 4px; color: #a5b4fc; font-size: 0.9em; font-weight: 600; border: 1px solid #4f46e5;">{provider}</code>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
                 <strong style="color: #d4d4d8;">Current Model:</strong>
                 <code style="background: #312e81; padding: 4px 8px; border-radius: 4px; color: #a5b4fc; font-size: 0.9em; font-weight: 600; border: 1px solid #4f46e5;">{current_model}</code>
             </div>
+            {f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;"><strong style="color: #d4d4d8;">Ollama Base URL:</strong><code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{model_info.get("base_url", OLLAMA_BASE_URL)}</code></div>' if provider == "Ollama" else ''}
+            {f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;"><strong style="color: #d4d4d8;">API Endpoint:</strong><code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{model_info.get("endpoint", "N/A")}</code></div>' if provider == "API" else ''}
         </div>
     </div>
     """
 
-def run_review(project_selection, mr_selection, post_comments, model_name, use_rag, progress=gr.Progress()):
+def run_review(project_selection, mr_selection, post_comments, model_provider, model_name, use_rag, 
+               api_endpoint, api_key, progress=gr.Progress()):
     """Run the AI review on selected MR with streaming results."""
     if not project_selection or not mr_selection:
         error_html = """
@@ -183,6 +197,27 @@ def run_review(project_selection, mr_selection, post_comments, model_name, use_r
         yield error_html, "⚠️ RAG enabled but vector store not available. Please create vector store first.", ""
         return
     
+    # Validate API configuration if using API provider
+    if model_provider == ModelProvider.API:
+        if not api_key or not api_key.strip():
+            error_html = """
+            <div style="padding: 24px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                <h3 style="margin-top: 0; color: white; font-weight: 600;">❌ Missing API Key</h3>
+                <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Please provide an API key for API-based models.</p>
+            </div>
+            """
+            yield error_html, "❌ Please provide an API key.", ""
+            return
+        if not model_name or not model_name.strip():
+            error_html = """
+            <div style="padding: 24px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                <h3 style="margin-top: 0; color: white; font-weight: 600;">❌ Missing Model Name</h3>
+                <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Please provide a model name for API-based models.</p>
+            </div>
+            """
+            yield error_html, "❌ Please provide a model name.", ""
+            return
+    
     # Reset stop flag
     reset_stop_flag()
     
@@ -196,7 +231,15 @@ def run_review(project_selection, mr_selection, post_comments, model_name, use_r
         total_files = len(get_mr_diffs(project_id, mr_iid))
         
         # Stream results as they come in
-        for results in review_merge_request_stream(project_id, mr_iid, post_comments=post_comments, model_name=model_name, use_rag=use_rag):
+        for results in review_merge_request_stream(
+            project_id, mr_iid, 
+            post_comments=post_comments, 
+            model_name=model_name, 
+            use_rag=use_rag,
+            provider=model_provider,
+            api_key=api_key if model_provider == ModelProvider.API else None,
+            api_endpoint=api_endpoint if model_provider == ModelProvider.API else None
+        ):
             elapsed_time = int(time.time() - start_time)
             
             # Check if cancelled
@@ -591,15 +634,60 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                     with gr.Accordion("⚙️ Environment & Model Settings", open=False):
                         env_info_display = gr.HTML(value=create_env_info_display())
                         
-                        model_dropdown = gr.Dropdown(
-                            label="🤖 Select Ollama Model",
-                            choices=[OLLAMA_MODEL],
-                            value=OLLAMA_MODEL,
+                        model_provider_dropdown = gr.Dropdown(
+                            label="🔌 Model Provider",
+                            choices=[("Ollama", ModelProvider.OLLAMA), ("API (Hosted)", ModelProvider.API)],
+                            value=ModelProvider.OLLAMA,
                             interactive=True
                         )
+                        
+                        # Ollama-specific settings
+                        with gr.Group(visible=True) as ollama_settings:
+                            model_dropdown = gr.Dropdown(
+                                label="🤖 Select Ollama Model",
+                                choices=[OLLAMA_MODEL],
+                                value=OLLAMA_MODEL,
+                                interactive=True
+                            )
+                            refresh_models_button = gr.Button("🔄 Refresh Models", size="sm")
+                        
+                        # API-specific settings
+                        with gr.Group(visible=False) as api_settings:
+                            api_model_name = gr.Textbox(
+                                label="📝 Model Name",
+                                placeholder="e.g., qwen3-30b",
+                                value="",
+                                interactive=True
+                            )
+                            api_endpoint_input = gr.Textbox(
+                                label="🌐 API Endpoint URL",
+                                placeholder="https://llm-platform.gosi.ins/api/chat/completions",
+                                value="https://llm-platform.gosi.ins/api/chat/completions",
+                                interactive=True
+                            )
+                            api_key_input = gr.Textbox(
+                                label="🔑 API Key",
+                                placeholder="Enter your API key",
+                                value="",
+                                type="password",
+                                interactive=True
+                            )
+                        
                         model_status = gr.Markdown("")
-                        refresh_models_button = gr.Button("🔄 Refresh Models", size="sm")
                         switch_model_button = gr.Button("✅ Apply Model", variant="secondary", size="sm")
+                        
+                        # Function to toggle visibility based on provider
+                        def toggle_provider_settings(provider):
+                            if provider == ModelProvider.OLLAMA:
+                                return gr.update(visible=True), gr.update(visible=False)
+                            else:
+                                return gr.update(visible=False), gr.update(visible=True)
+                        
+                        model_provider_dropdown.change(
+                            toggle_provider_settings,
+                            inputs=[model_provider_dropdown],
+                            outputs=[ollama_settings, api_settings]
+                        )
                 
                 with gr.Column(scale=2):
                     mr_info_display = gr.HTML(
@@ -748,7 +836,7 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
         outputs=[mr_info_display, project_id_state, mr_iid_state]
     )
     
-    def start_review(project, mr, post_comments, model, use_rag):
+    def start_review(project, mr, post_comments, model_provider, ollama_model, api_model, use_rag, api_endpoint, api_key):
         """Start review and show stop button."""
         return (
             gr.update(visible=False),  # Hide start button
@@ -765,13 +853,28 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
             "⏹️ Stopping review..."    # Progress message
     )
     
+    def run_review_wrapper(project, mr, post_comments, provider, ollama_model, api_model, use_rag, api_endpoint, api_key):
+        """Wrapper to prepare parameters for run_review."""
+        model_name = ollama_model if provider == ModelProvider.OLLAMA else api_model
+        # Yield from the generator to properly stream results
+        yield from run_review(
+            project, mr, post_comments, 
+            provider,
+            model_name,
+            use_rag,
+            api_endpoint if provider == ModelProvider.API else None,
+            api_key if provider == ModelProvider.API else None
+        )
+    
     review_button.click(
         start_review,
-        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_dropdown, use_rag_checkbox],
+        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_provider_dropdown, 
+                model_dropdown, api_model_name, use_rag_checkbox, api_endpoint_input, api_key_input],
         outputs=[review_button, stop_button, progress_display]
     ).then(
-        run_review,
-        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_dropdown, use_rag_checkbox],
+        run_review_wrapper,
+        inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_provider_dropdown,
+                model_dropdown, api_model_name, use_rag_checkbox, api_endpoint_input, api_key_input],
         outputs=[review_output, summary_output, progress_display]
     ).then(
         lambda: (
@@ -794,18 +897,13 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
     )
     
     switch_model_button.click(
-        switch_model,
-        inputs=[model_dropdown],
-        outputs=[model_status]
-    ).then(
-        lambda: create_env_info_display(),
-        inputs=[],
-        outputs=[env_info_display]
-    )
-    
-    model_dropdown.change(
-        switch_model,
-        inputs=[model_dropdown],
+        lambda provider, ollama_model, api_model, api_endpoint, api_key: switch_model(
+            provider,
+            ollama_model if provider == ModelProvider.OLLAMA else api_model,
+            api_endpoint if provider == ModelProvider.API else None,
+            api_key if provider == ModelProvider.API else None
+        ),
+        inputs=[model_provider_dropdown, model_dropdown, api_model_name, api_endpoint_input, api_key_input],
         outputs=[model_status]
     ).then(
         lambda: create_env_info_display(),

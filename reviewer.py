@@ -1,6 +1,6 @@
 from langchain.prompts import PromptTemplate
-from langchain_community.llms import Ollama
 from config import OLLAMA_MODEL, OLLAMA_BASE_URL
+from models import get_llm, set_llm, ModelProvider, UnifiedLLM
 from prompts import CODE_REVIEW_PROMPT, CODE_REVIEW_PROMPT_WITH_RAG
 from gitlab_client import get_mr_diffs, post_inline_comment, post_summary_comment
 from rag_system import load_vector_store, retrieve_relevant_context, is_vector_store_available
@@ -11,7 +11,7 @@ import threading
 from typing import Dict, List, Tuple, Optional
 
 # Global LLM instance (will be updated when model changes)
-llm = Ollama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+llm = get_llm()
 
 # Global stop flag for cancellation
 _stop_review_flag = threading.Event()
@@ -159,15 +159,27 @@ def get_available_models():
         print(f"Error fetching Ollama models: {e}")
         return []
 
-def set_model(model_name):
+def set_model(model_name, provider=ModelProvider.OLLAMA, base_url=None, api_key=None, api_endpoint=None):
     """Update the global LLM instance with a new model."""
     global llm
-    llm = Ollama(model=model_name, base_url=OLLAMA_BASE_URL)
-    return f"Model switched to: {model_name}"
+    llm = set_llm(
+        provider=provider,
+        model_name=model_name,
+        base_url=base_url,
+        api_key=api_key,
+        api_endpoint=api_endpoint
+    )
+    provider_name = "Ollama" if provider == ModelProvider.OLLAMA else "API"
+    return f"Model switched to: {model_name} ({provider_name})"
 
 def get_current_model():
     """Get the current model name."""
-    return llm.model if hasattr(llm, 'model') else OLLAMA_MODEL
+    if hasattr(llm, 'model_name'):
+        return llm.model_name
+    elif hasattr(llm, 'model'):
+        return llm.model
+    else:
+        return OLLAMA_MODEL
 
 def reset_stop_flag():
     """Reset the stop flag for a new review."""
@@ -183,7 +195,8 @@ def is_stopped():
     """Check if review should be stopped."""
     return _stop_review_flag.is_set()
 
-def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False):
+def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False, 
+                                provider=None, api_key=None, api_endpoint=None):
     """
     Review a merge request and yield results incrementally as a generator.
     Yields partial results as they're processed.
@@ -194,10 +207,21 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         post_comments: Whether to post comments to GitLab
         model_name: Optional model name to use for this review
         use_rag: Whether to use RAG for augmented prompts with project guidelines
+        provider: Optional provider type ("ollama" or "api")
+        api_key: Optional API key for API-based models
+        api_endpoint: Optional API endpoint for API-based models
     """
     # Use specified model or current global model
     if model_name:
-        review_llm = Ollama(model=model_name, base_url=OLLAMA_BASE_URL)
+        # If provider is specified, use it; otherwise default to Ollama for backward compatibility
+        review_provider = provider if provider else ModelProvider.OLLAMA
+        review_llm = UnifiedLLM(
+            provider=review_provider,
+            model_name=model_name,
+            base_url=OLLAMA_BASE_URL if review_provider == ModelProvider.OLLAMA else None,
+            api_key=api_key,
+            api_endpoint=api_endpoint
+        )
     else:
         review_llm = llm
     
@@ -330,7 +354,8 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         'done': True
     }
 
-def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False):
+def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False,
+                         provider=None, api_key=None, api_endpoint=None):
     """
     Review a merge request and optionally post comments.
     Returns review results as a dictionary.
@@ -341,9 +366,13 @@ def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None
         post_comments: Whether to post comments to GitLab
         model_name: Optional model name to use for this review
         use_rag: Whether to use RAG for augmented prompts with project guidelines
+        provider: Optional provider type ("ollama" or "api")
+        api_key: Optional API key for API-based models
+        api_endpoint: Optional API endpoint for API-based models
     """
     # Use the streaming version and get the final result
-    for result in review_merge_request_stream(project_id, mr_iid, post_comments, model_name, use_rag):
+    for result in review_merge_request_stream(project_id, mr_iid, post_comments, model_name, use_rag,
+                                               provider, api_key, api_endpoint):
         if result.get('done', False):
             # Remove 'done' key before returning
             result.pop('done', None)
