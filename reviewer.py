@@ -8,6 +8,7 @@ import json
 import re
 import requests
 import threading
+from typing import Dict, List, Tuple, Optional
 
 # Global LLM instance (will be updated when model changes)
 llm = Ollama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
@@ -24,6 +25,113 @@ prompt_with_rag = PromptTemplate(
     template=CODE_REVIEW_PROMPT_WITH_RAG,
     input_variables=["diff", "guidelines"]
 )
+
+def parse_diff_for_new_lines(diff_text: str) -> Tuple[str, Dict[int, int], set]:
+    """
+    Parse a unified diff to extract only new lines with their actual line numbers.
+    
+    Returns:
+        Tuple of (formatted_diff_text, line_number_mapping, valid_new_lines)
+        - formatted_diff_text: Diff with line numbers clearly marked for new lines only
+        - line_number_mapping: Dict mapping formatted diff line numbers to actual new file line numbers
+        - valid_new_lines: Set of all valid new line numbers in the file
+    """
+    lines = diff_text.split('\n')
+    formatted_lines = []
+    line_mapping = {}  # Maps formatted diff line number to actual new file line number
+    valid_new_lines = set()  # Set of all valid new line numbers
+    formatted_line_num = 0
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check for hunk header: @@ -old_start,old_count +new_start,new_count @@
+        hunk_match = re.match(r'^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@', line)
+        if hunk_match:
+            old_start = int(hunk_match.group(1))
+            old_count = int(hunk_match.group(2)) if hunk_match.group(2) else 1
+            new_start = int(hunk_match.group(3))
+            new_count = int(hunk_match.group(4)) if hunk_match.group(4) else 1
+            
+            # Add hunk header
+            formatted_lines.append(line)
+            formatted_line_num += 1
+            
+            # Track line numbers within this hunk
+            old_line = old_start
+            new_line = new_start
+            
+            i += 1
+            # Process lines in this hunk
+            while i < len(lines):
+                hunk_line = lines[i]
+                
+                # Check if we've hit the next hunk or end of diff
+                if hunk_line.startswith('@@'):
+                    break
+                
+                if hunk_line.startswith('+') and not hunk_line.startswith('+++'):
+                    # New line - this is what we want to review
+                    code_content = hunk_line[1:]  # Remove the '+' prefix
+                    formatted_lines.append(f"  [{new_line}] {code_content}")
+                    line_mapping[formatted_line_num] = new_line
+                    valid_new_lines.add(new_line)
+                    formatted_line_num += 1
+                    new_line += 1
+                elif hunk_line.startswith('-') and not hunk_line.startswith('---'):
+                    # Removed line - skip it, don't include in formatted diff
+                    old_line += 1
+                elif hunk_line.startswith(' '):
+                    # Context line (unchanged) - include for context but don't map
+                    formatted_lines.append(hunk_line)
+                    formatted_line_num += 1
+                    old_line += 1
+                    new_line += 1
+                elif hunk_line.startswith('\\'):
+                    # End of file marker
+                    break
+                else:
+                    # Other lines (like file headers)
+                    formatted_lines.append(hunk_line)
+                    formatted_line_num += 1
+                
+                i += 1
+        else:
+            # Lines before first hunk (file headers, etc.)
+            formatted_lines.append(line)
+            formatted_line_num += 1
+            i += 1
+    
+    formatted_diff = '\n'.join(formatted_lines)
+    return formatted_diff, line_mapping, valid_new_lines
+
+
+def validate_finding_line(finding_line: int, line_mapping: Dict[int, int], valid_new_lines: set) -> Optional[int]:
+    """
+    Validate and map a line number from model output to actual new file line number.
+    
+    Args:
+        finding_line: Line number reported by the model
+        line_mapping: Mapping from formatted diff line numbers to actual new file line numbers
+        valid_new_lines: Set of all valid new line numbers
+    
+    Returns:
+        Actual new file line number if valid, None otherwise
+    """
+    # First try: check if it's a valid new line number directly
+    if finding_line in valid_new_lines:
+        return finding_line
+    
+    # Second try: check if it's a formatted diff line number that maps to a new line
+    if finding_line in line_mapping:
+        mapped_line = line_mapping[finding_line]
+        if mapped_line in valid_new_lines:
+            return mapped_line
+    
+    # If we can't validate, return None (will be filtered out)
+    return None
+
 
 def parse_llm_output(text: str):
     """Extract JSON array from model output."""
@@ -128,17 +236,27 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         diff_text = change["diff"]
         file_path = change["new_path"]
 
-        # Format the prompt correctly
+        # Parse diff to extract new lines with correct line numbers
+        formatted_diff, line_mapping, valid_new_lines = parse_diff_for_new_lines(diff_text)
+        
+        if valid_new_lines:
+            print(f"📝 Found {len(valid_new_lines)} new lines in {file_path}")
+            print(f"   Valid line numbers: {sorted(list(valid_new_lines))[:10]}{'...' if len(valid_new_lines) > 10 else ''}")
+        else:
+            print(f"⚠️ No new lines found in {file_path}, skipping review")
+            continue
+        
+        # Format the prompt correctly with the formatted diff
         if use_rag and vector_store:
             # Retrieve relevant guidelines for this diff
             guidelines = retrieve_relevant_context(diff_text, vector_store, k=3)
             if guidelines:
-                formatted_prompt = prompt_with_rag.format(diff=diff_text, guidelines=guidelines)
+                formatted_prompt = prompt_with_rag.format(diff=formatted_diff, guidelines=guidelines)
             else:
                 # Fallback to regular prompt if no guidelines found
-                formatted_prompt = prompt.format(diff=diff_text)
+                formatted_prompt = prompt.format(diff=formatted_diff)
         else:
-            formatted_prompt = prompt.format(diff=diff_text)
+            formatted_prompt = prompt.format(diff=formatted_diff)
 
         # Call the LLM
         response = review_llm(formatted_prompt)
@@ -147,12 +265,26 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         # Parse JSON safely
         findings = parse_llm_output(response)
 
-        # Process findings
+        # Process findings with validation
         for item in findings:
-            line_num = item['line']
+            # Validate and map the line number
+            reported_line = item.get('line')
+            if reported_line is None:
+                print(f"⚠️ Finding missing line number, skipping: {item.get('comment', 'Unknown')}")
+                continue
+            
+            # Validate the line number and get actual new file line number
+            actual_line_num = validate_finding_line(reported_line, line_mapping, valid_new_lines)
+            
+            if actual_line_num is None:
+                print(f"⚠️ Invalid line number {reported_line} for file {file_path}")
+                print(f"   Valid new lines: {sorted(list(valid_new_lines))[:20]}{'...' if len(valid_new_lines) > 20 else ''}")
+                print(f"   Skipping comment: {item.get('comment', 'Unknown')[:100]}")
+                continue
+            
             finding = {
                 'file': file_path,
-                'line': line_num,
+                'line': actual_line_num,
                 'comment': item['comment'],
                 'severity': item['severity'],
                 'line_code': item.get('line_code', '')
@@ -165,11 +297,11 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
                     mr_iid=mr_iid,
                     body=f"**{item['severity'].upper()}**: {item['comment']}",
                     file_path=file_path,
-                    new_line=line_num,
+                    new_line=actual_line_num,
                     old_line=None
                 )
             
-            summary.append(f"- `{file_path}:{line_num}` {item['comment']}\n({item.get('line_code', '')})")
+            summary.append(f"- `{file_path}:{actual_line_num}` {item['comment']}\n({item.get('line_code', '')})")
         
         # Yield partial results after processing each file
         yield {

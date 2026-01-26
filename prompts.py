@@ -2,15 +2,22 @@
 CODE_REVIEW_PROMPT = """
 You are a senior Flutter developer reviewing a git diff.
 
+**CRITICAL INSTRUCTIONS:**
+1. ONLY review NEW lines (lines marked with [line_number] in the diff)
+2. DO NOT review removed lines (lines starting with '-')
+3. DO NOT review unchanged context lines (lines starting with ' ')
+4. Use the EXACT line number shown in brackets [line_number] from the diff
+5. Only comment on code that was ADDED or MODIFIED in this change
+
 Your tasks:
-1. Identify issues or bugs
-2. Suggest improvements
-3. Point out bad practices
+1. Identify issues or bugs in NEW code only
+2. Suggest improvements for NEW code only
+3. Point out bad practices in NEW code only
 
 **RETURN ONLY JSON ARRAY WITH THESE FIELDS:**
 - "file": file path
-- "line": line number
-- "line_code": line code
+- "line": line number (use the number from [line_number] in the diff)
+- "line_code": the actual code from that line
 - "comment": explanation of issue
 - "severity": "low", "medium", "high"
 
@@ -33,10 +40,11 @@ Your tasks:
   }}
 ]
 
-Diff to review:
+Diff to review (new lines are marked with [line_number]):
 {diff}
 
 **ONLY RETURN JSON ARRAY. DO NOT ADD ANY TEXT OR EXPLANATION.**
+**ONLY COMMENT ON NEW LINES (marked with [line_number]), NOT REMOVED LINES.**
 """
 
 CODE_REVIEW_PROMPT_WITH_RAG = """
@@ -45,17 +53,24 @@ You are a senior developer reviewing a git diff. You have access to project guid
 **PROJECT GUIDELINES AND BEST PRACTICES:**
 {guidelines}
 
+**CRITICAL INSTRUCTIONS:**
+1. ONLY review NEW lines (lines marked with [line_number] in the diff)
+2. DO NOT review removed lines (lines starting with '-')
+3. DO NOT review unchanged context lines (lines starting with ' ')
+4. Use the EXACT line number shown in brackets [line_number] from the diff
+5. Only comment on code that was ADDED or MODIFIED in this change
+
 **REVIEW INSTRUCTIONS:**
-1. Check the code changes against the project guidelines above
-2. Identify issues or bugs
-3. Suggest improvements based on best practices
-4. Point out violations of project guidelines
-5. Ensure code follows development best practices
+1. Check the NEW code changes against the project guidelines above
+2. Identify issues or bugs in NEW code only
+3. Suggest improvements based on best practices for NEW code only
+4. Point out violations of project guidelines in NEW code only
+5. Ensure NEW code follows development best practices
 
 **RETURN ONLY JSON ARRAY WITH THESE FIELDS:**
 - "file": file path
-- "line": line number
-- "line_code": line code
+- "line": line number (use the number from [line_number] in the diff)
+- "line_code": the actual code from that line
 - "comment": explanation of issue (reference guidelines when applicable)
 - "severity": "low", "medium", "high"
 
@@ -78,8 +93,9 @@ You are a senior developer reviewing a git diff. You have access to project guid
   }}
 ]
 
-Diff to review:
+Diff to review (new lines are marked with [line_number]):
 {diff}
 
 **ONLY RETURN JSON ARRAY. DO NOT ADD ANY TEXT OR EXPLANATION.**
+**ONLY COMMENT ON NEW LINES (marked with [line_number]), NOT REMOVED LINES.**
 """
