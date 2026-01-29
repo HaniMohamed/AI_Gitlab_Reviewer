@@ -1,5 +1,5 @@
 import gradio as gr
-from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs
+from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs, post_inline_comment
 from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
 from models import ModelProvider, get_llm
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL, get_gitlab_url, get_gitlab_token, set_gitlab_credentials, is_gitlab_configured
@@ -176,7 +176,21 @@ def create_env_info_display():
 
 def run_review(project_selection, mr_selection, post_comments, model_provider, model_name, use_rag, 
                api_endpoint, api_key, progress=gr.Progress()):
-    """Run the AI review on selected MR with streaming results."""
+    """Run the AI review on selected MR with streaming results.
+    
+    Yields:
+        - findings_html: HTML display of findings
+        - summary_text: Summary markdown
+        - progress_info: Progress display text
+        - findings_list: List of findings for manual posting
+        - posted_indices: Set of posted finding indices (empty set initially)
+    """
+    preview_mode = not post_comments  # Preview mode when not auto-posting
+    
+    # Error yield helper
+    def error_yield(html, msg, progress):
+        return (html, msg, progress, [], set())
+    
     if not project_selection or not mr_selection:
         error_html = """
         <div style="padding: 24px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
@@ -184,7 +198,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
             <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Please select a project and merge request first.</p>
         </div>
         """
-        yield error_html, "❌ Please select a project and merge request first.", ""
+        yield error_yield(error_html, "❌ Please select a project and merge request first.", "")
         return
     
     # Check RAG availability if enabled
@@ -195,7 +209,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
             <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">RAG is enabled but vector store is not available. Please create a vector store first in the "Vectorize Data" tab.</p>
         </div>
         """
-        yield error_html, "⚠️ RAG enabled but vector store not available. Please create vector store first.", ""
+        yield error_yield(error_html, "⚠️ RAG enabled but vector store not available. Please create vector store first.", "")
         return
     
     # Validate API configuration if using API provider
@@ -207,7 +221,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
                 <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Please provide an API key for API-based models.</p>
             </div>
             """
-            yield error_html, "❌ Please provide an API key.", ""
+            yield error_yield(error_html, "❌ Please provide an API key.", "")
             return
         if not model_name or not model_name.strip():
             error_html = """
@@ -216,7 +230,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
                 <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;">Please provide a model name for API-based models.</p>
             </div>
             """
-            yield error_html, "❌ Please provide a model name.", ""
+            yield error_yield(error_html, "❌ Please provide a model name.", "")
             return
     
     # Reset stop flag
@@ -242,6 +256,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
             api_endpoint=api_endpoint if model_provider == ModelProvider.API else None
         ):
             elapsed_time = int(time.time() - start_time)
+            findings = results.get('findings', [])
             
             # Check if cancelled
             if results.get('cancelled', False):
@@ -252,11 +267,12 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
                 </div>
                 """
                 progress_info = f"⏹️ Cancelled after {elapsed_time}s"
-                yield cancelled_html, f"⚠️ Review cancelled after {elapsed_time}s. {results.get('files_reviewed', 0)} file(s) processed.", progress_info
+                yield (cancelled_html, f"⚠️ Review cancelled after {elapsed_time}s. {results.get('files_reviewed', 0)} file(s) processed.", 
+                       progress_info, findings, set())
                 return
             
-            # Format current findings
-            findings_html = format_findings(results['findings'])
+            # Format current findings with preview mode
+            findings_html = format_findings(findings, preview_mode=preview_mode)
             summary_text = format_summary(results)
         
             # Update progress info
@@ -266,7 +282,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
                 progress_info = f"⏱️ Processing... ({elapsed_time}s) | Files: {results.get('files_reviewed', 0)}/{total_files} | Findings: {results.get('total_findings', 0)}"
             
             # Yield incremental results
-            yield findings_html, summary_text, progress_info
+            yield (findings_html, summary_text, progress_info, findings, set())
             
             # If done, break
             if results.get('done', False):
@@ -281,10 +297,19 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
             <p style="color: rgba(255,255,255,0.95); margin-bottom: 0;"><strong>Error:</strong> {error}</p>
         </div>
         """
-        yield error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"❌ Failed after {elapsed_time}s"
+        yield error_yield(error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"❌ Failed after {elapsed_time}s")
 
-def format_findings(findings):
-    """Format findings as HTML."""
+def format_findings(findings, preview_mode=False, posted_indices=None):
+    """Format findings as HTML.
+    
+    Args:
+        findings: List of findings from the review
+        preview_mode: If True, show post buttons for manual posting
+        posted_indices: Set of indices that have been successfully posted
+    """
+    if posted_indices is None:
+        posted_indices = set()
+    
     if not findings:
         return """
         <div style="padding: 40px; text-align: center; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
@@ -307,17 +332,51 @@ def format_findings(findings):
     
     html = "<div style='display: flex; flex-direction: column; gap: 16px;'>"
     
-    for finding in findings:
+    for idx, finding in enumerate(findings):
         severity = finding['severity'].lower()
         color = severity_colors.get(severity, severity_colors['low'])
         icon = severity_icons.get(severity, '🔵')
         
+        # Check if this finding has been posted
+        is_posted = idx in posted_indices
+        
+        # Build action button/badge for preview mode
+        action_html = ""
+        if preview_mode:
+            if is_posted:
+                # Success badge - beautiful green checkmark with animation
+                action_html = """
+                <div style="display: flex; align-items: center; gap: 6px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 10px 16px; border-radius: 25px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    <span style="color: white; font-weight: 600; font-size: 0.9em; letter-spacing: 0.3px;">Posted</span>
+                </div>
+                """
+            else:
+                # Post button - modern, clickable with hover effect
+                action_html = f"""
+                <button 
+                    onclick="postFinding({idx})" 
+                    style="display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 10px 18px; border-radius: 25px; border: none; cursor: pointer; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4); transition: all 0.2s ease; font-family: inherit;"
+                    onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(99, 102, 241, 0.5)';"
+                    onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(99, 102, 241, 0.4)';"
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 2L11 13"></path>
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                    </svg>
+                    <span style="color: white; font-weight: 600; font-size: 0.9em; letter-spacing: 0.3px;">Post</span>
+                </button>
+                """
+        
         html += f"""
-        <div style="background: {color}; padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);">
-            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
-                <h3 style="margin: 0; font-size: 1.1em; font-weight: 600; color: white;">
+        <div style="background: {color}; padding: 20px; border-radius: 12px; color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);" data-finding-index="{idx}">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px; gap: 12px;">
+                <h3 style="margin: 0; font-size: 1.1em; font-weight: 600; color: white; flex: 1;">
                     {icon} <strong>{finding['severity'].upper()}</strong> - {finding['file']}:{finding['line']}
                 </h3>
+                {action_html}
             </div>
             <div style="background: rgba(0,0,0,0.2); padding: 14px; border-radius: 8px; margin-top: 10px;">
                 <p style="margin: 0; line-height: 1.6; color: rgba(255,255,255,0.95);"><strong style="color: white;">💬 Comment:</strong> {finding['comment']}</p>
@@ -730,7 +789,7 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
                     
                     post_comments_checkbox = gr.Checkbox(
                         label="📝 Post comments on GitLab (uncheck to preview only)",
-                        value=True
+                        value=False
                     )
                     
                     use_rag_checkbox = gr.Checkbox(
@@ -834,6 +893,31 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
                                 label="Review Findings",
                                 value="<div style='padding: 40px; text-align: center; color: #a1a1aa; background: #27272a; border-radius: 12px; border: 2px dashed #3f3f46;'>Click 'Start AI Review' to begin</div>"
                             )
+                            
+                            # Hidden trigger for posting from card buttons (invisible to user)
+                            post_trigger = gr.Textbox(
+                                value="",
+                                visible=False,
+                                elem_id="post_trigger"
+                            )
+                            
+                            # Status display for post results
+                            post_single_status = gr.HTML(value="", elem_id="post_status")
+                            
+                            # JavaScript to handle post button clicks
+                            gr.HTML("""
+                                <script>
+                                    function postFinding(index) {
+                                        // Find the hidden textbox and update its value
+                                        const trigger = document.querySelector('#post_trigger textarea, #post_trigger input');
+                                        if (trigger) {
+                                            // Set unique value to ensure change event fires
+                                            trigger.value = index + '_' + Date.now();
+                                            trigger.dispatchEvent(new Event('input', { bubbles: true }));
+                                        }
+                                    }
+                                </script>
+                            """)
                         
                         with gr.Tab("📝 Summary"):
                             summary_output = gr.Markdown(
@@ -937,6 +1021,8 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
     # Hidden state variables
     project_id_state = gr.State(value=None)
     mr_iid_state = gr.State(value=None)
+    findings_state = gr.State(value=[])  # Store findings for manual posting
+    posted_indices_state = gr.State(value=set())  # Track which findings have been posted
     
     # ===== Credentials Popup Event Handlers =====
     def connect_to_gitlab(url, token):
@@ -1075,13 +1161,14 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
         run_review_wrapper,
         inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_provider_dropdown,
                 model_dropdown, api_model_name, use_rag_checkbox, api_endpoint_input, api_key_input],
-        outputs=[review_output, summary_output, progress_display]
+        outputs=[review_output, summary_output, progress_display, findings_state, posted_indices_state]
     ).then(
         lambda: (
             gr.update(visible=True),   # Show start button
             gr.update(visible=False),  # Hide stop button
+            ""  # Clear post status
         ),
-        outputs=[review_button, stop_button]
+        outputs=[review_button, stop_button, post_single_status]
     )
     
     stop_button.click(
@@ -1125,6 +1212,77 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
         show_credentials_popup,
         inputs=[],
         outputs=[credentials_overlay, credentials_popup, gitlab_url_input, gitlab_token_input]
+    )
+    
+    # Post individual comment handler (triggered by button click via JavaScript)
+    def post_single_comment(trigger_value, findings, posted_indices, project_selection, mr_selection):
+        """Post a single finding as an inline comment to GitLab."""
+        if not trigger_value or not findings:
+            return ("", findings, posted_indices, gr.update())
+        
+        try:
+            # Extract index from trigger value (format: "index_timestamp")
+            idx = int(trigger_value.split("_")[0])
+            
+            if idx < 0 or idx >= len(findings):
+                return (
+                    "<div style='color: #f87171; padding: 12px 16px; background: rgba(248, 113, 113, 0.15); border-radius: 10px; border: 1px solid rgba(248, 113, 113, 0.3); margin-top: 12px;'>⚠️ Invalid finding</div>",
+                    findings,
+                    posted_indices,
+                    gr.update()
+                )
+            
+            if idx in posted_indices:
+                return (
+                    "<div style='color: #fbbf24; padding: 12px 16px; background: rgba(251, 191, 36, 0.15); border-radius: 10px; border: 1px solid rgba(251, 191, 36, 0.3); margin-top: 12px;'>ℹ️ Already posted</div>",
+                    findings,
+                    posted_indices,
+                    gr.update()
+                )
+            
+            finding = findings[idx]
+            
+            # Get project ID and MR IID
+            project_id = int(project_selection.split("(ID: ")[1].split(")")[0])
+            mr_iid = int(mr_selection.split("!")[1].split(":")[0])
+            
+            # Post the comment
+            comment_body = f"**{finding['severity'].upper()}**: {finding['comment']}"
+            post_inline_comment(
+                project_id=project_id,
+                mr_iid=mr_iid,
+                body=comment_body,
+                file_path=finding['file'],
+                new_line=finding['line']
+            )
+            
+            # Update posted indices
+            new_posted_indices = posted_indices.copy()
+            new_posted_indices.add(idx)
+            
+            # Reformat findings with updated posted status
+            updated_html = format_findings(findings, preview_mode=True, posted_indices=new_posted_indices)
+            
+            return (
+                f"<div style='color: #34d399; padding: 12px 16px; background: rgba(16, 185, 129, 0.15); border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3); margin-top: 12px; display: flex; align-items: center; gap: 8px;'><svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5'><polyline points='20 6 9 17 4 12'></polyline></svg> Posted to {finding['file']}:{finding['line']}</div>",
+                findings,
+                new_posted_indices,
+                updated_html
+            )
+            
+        except Exception as e:
+            return (
+                f"<div style='color: #f87171; padding: 12px 16px; background: rgba(248, 113, 113, 0.15); border-radius: 10px; border: 1px solid rgba(248, 113, 113, 0.3); margin-top: 12px;'>❌ Error: {str(e)}</div>",
+                findings,
+                posted_indices,
+                gr.update()
+            )
+    
+    # Trigger post when hidden textbox changes (from button click)
+    post_trigger.change(
+        post_single_comment,
+        inputs=[post_trigger, findings_state, posted_indices_state, project_dropdown, mr_dropdown],
+        outputs=[post_single_status, findings_state, posted_indices_state, review_output]
     )
     
     # Load projects and models on startup (only if GitLab is configured)
