@@ -497,6 +497,14 @@ custom_css = """
     margin: 2px !important;
     border: 1px solid rgba(16, 185, 129, 0.3) !important;
 }
+/* Hidden post control - elements are accessible but invisible */
+#post_control_row {
+    position: fixed !important;
+    left: -9999px !important;
+    top: -9999px !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
 /* Tab button styling - unselected */
 button[aria-selected="false"] {
     background: #27272a !important;
@@ -645,8 +653,76 @@ input[type="checkbox"]:focus,
 }
 """
 
+# JavaScript for post button functionality (injected into page head)
+post_finding_js = """
+<script>
+    // Define postFinding function globally
+    window.postFinding = function(index) {
+        console.log('postFinding called with index:', index);
+        
+        // Find the number input - try multiple selectors
+        let numInput = document.querySelector('#post_finding_num input[type="number"]');
+        if (!numInput) {
+            numInput = document.querySelector('#post_finding_num input');
+        }
+        if (!numInput) {
+            // Try finding by looking at all number inputs
+            const allInputs = document.querySelectorAll('input[type="number"]');
+            console.log('All number inputs found:', allInputs.length);
+            allInputs.forEach((inp, i) => {
+                console.log('Input', i, ':', inp.closest('[id]')?.id, inp);
+            });
+        }
+        
+        // Find the button - try multiple selectors
+        let btn = document.querySelector('#post_single_btn button');
+        if (!btn) {
+            btn = document.querySelector('#post_single_btn');
+            if (btn && btn.tagName !== 'BUTTON') {
+                btn = btn.querySelector('button');
+            }
+        }
+        if (!btn) {
+            // Try finding by looking at all buttons
+            const allBtns = document.querySelectorAll('button');
+            console.log('All buttons:', allBtns.length);
+            allBtns.forEach((b, i) => {
+                if (b.closest('[id]')?.id?.includes('post')) {
+                    console.log('Post-related button:', b.closest('[id]')?.id, b);
+                }
+            });
+        }
+        
+        if (!numInput) {
+            console.error('Number input not found');
+            return;
+        }
+        if (!btn) {
+            console.error('Button not found');
+            return;
+        }
+        
+        console.log('Found numInput:', numInput);
+        console.log('Found btn:', btn);
+        
+        // Set value using native setter for React/Gradio compatibility
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        setter.call(numInput, index);
+        numInput.dispatchEvent(new Event('input', { bubbles: true }));
+        numInput.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        // Click the post button after a short delay
+        setTimeout(() => {
+            btn.click();
+            console.log('Button clicked for index:', index);
+        }, 150);
+    };
+    console.log('postFinding function registered globally');
+</script>
+"""
+
 # Create Gradio Interface
-with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
+with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as demo:
     
     # ===== GitLab Credentials Popup =====
     # Overlay background
@@ -894,30 +970,22 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
                                 value="<div style='padding: 40px; text-align: center; color: #a1a1aa; background: #27272a; border-radius: 12px; border: 2px dashed #3f3f46;'>Click 'Start AI Review' to begin</div>"
                             )
                             
-                            # Hidden trigger for posting from card buttons (invisible to user)
-                            post_trigger = gr.Textbox(
-                                value="",
-                                visible=False,
-                                elem_id="post_trigger"
-                            )
+                            # Hidden post control (rendered but hidden via CSS - for JS to interact with)
+                            with gr.Row(elem_id="post_control_row"):
+                                post_finding_num = gr.Number(
+                                    value=-1,
+                                    label="",
+                                    minimum=-1,
+                                    precision=0,
+                                    elem_id="post_finding_num"
+                                )
+                                post_single_btn = gr.Button(
+                                    "📤",
+                                    elem_id="post_single_btn"
+                                )
                             
                             # Status display for post results
                             post_single_status = gr.HTML(value="", elem_id="post_status")
-                            
-                            # JavaScript to handle post button clicks
-                            gr.HTML("""
-                                <script>
-                                    function postFinding(index) {
-                                        // Find the hidden textbox and update its value
-                                        const trigger = document.querySelector('#post_trigger textarea, #post_trigger input');
-                                        if (trigger) {
-                                            // Set unique value to ensure change event fires
-                                            trigger.value = index + '_' + Date.now();
-                                            trigger.dispatchEvent(new Event('input', { bubbles: true }));
-                                        }
-                                    }
-                                </script>
-                            """)
                         
                         with gr.Tab("📝 Summary"):
                             summary_output = gr.Markdown(
@@ -1214,30 +1282,25 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
         outputs=[credentials_overlay, credentials_popup, gitlab_url_input, gitlab_token_input]
     )
     
-    # Post individual comment handler (triggered by button click via JavaScript)
-    def post_single_comment(trigger_value, findings, posted_indices, project_selection, mr_selection):
+    # Post individual comment handler (triggered by button click)
+    def post_single_comment(finding_num, findings, posted_indices, project_selection, mr_selection):
         """Post a single finding as an inline comment to GitLab."""
-        if not trigger_value or not findings:
-            return ("", findings, posted_indices, gr.update())
+        if finding_num is None or finding_num < 0 or not findings:
+            return ("", findings, posted_indices, gr.update(), -1)
         
         try:
-            # Extract index from trigger value (format: "index_timestamp")
-            idx = int(trigger_value.split("_")[0])
+            idx = int(finding_num)
             
-            if idx < 0 or idx >= len(findings):
+            if idx >= len(findings):
                 return (
                     "<div style='color: #f87171; padding: 12px 16px; background: rgba(248, 113, 113, 0.15); border-radius: 10px; border: 1px solid rgba(248, 113, 113, 0.3); margin-top: 12px;'>⚠️ Invalid finding</div>",
-                    findings,
-                    posted_indices,
-                    gr.update()
+                    findings, posted_indices, gr.update(), -1
                 )
             
             if idx in posted_indices:
                 return (
                     "<div style='color: #fbbf24; padding: 12px 16px; background: rgba(251, 191, 36, 0.15); border-radius: 10px; border: 1px solid rgba(251, 191, 36, 0.3); margin-top: 12px;'>ℹ️ Already posted</div>",
-                    findings,
-                    posted_indices,
-                    gr.update()
+                    findings, posted_indices, gr.update(), -1
                 )
             
             finding = findings[idx]
@@ -1265,24 +1328,20 @@ with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
             
             return (
                 f"<div style='color: #34d399; padding: 12px 16px; background: rgba(16, 185, 129, 0.15); border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3); margin-top: 12px; display: flex; align-items: center; gap: 8px;'><svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5'><polyline points='20 6 9 17 4 12'></polyline></svg> Posted to {finding['file']}:{finding['line']}</div>",
-                findings,
-                new_posted_indices,
-                updated_html
+                findings, new_posted_indices, updated_html, -1
             )
             
         except Exception as e:
             return (
                 f"<div style='color: #f87171; padding: 12px 16px; background: rgba(248, 113, 113, 0.15); border-radius: 10px; border: 1px solid rgba(248, 113, 113, 0.3); margin-top: 12px;'>❌ Error: {str(e)}</div>",
-                findings,
-                posted_indices,
-                gr.update()
+                findings, posted_indices, gr.update(), -1
             )
     
-    # Trigger post when hidden textbox changes (from button click)
-    post_trigger.change(
+    # Trigger post when button is clicked
+    post_single_btn.click(
         post_single_comment,
-        inputs=[post_trigger, findings_state, posted_indices_state, project_dropdown, mr_dropdown],
-        outputs=[post_single_status, findings_state, posted_indices_state, review_output]
+        inputs=[post_finding_num, findings_state, posted_indices_state, project_dropdown, mr_dropdown],
+        outputs=[post_single_status, findings_state, posted_indices_state, review_output, post_finding_num]
     )
     
     # Load projects and models on startup (only if GitLab is configured)
