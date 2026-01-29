@@ -2,7 +2,7 @@ import gradio as gr
 from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs
 from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
 from models import ModelProvider, get_llm
-from config import GITLAB_URL, OLLAMA_BASE_URL, OLLAMA_MODEL
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL, get_gitlab_url, get_gitlab_token, set_gitlab_credentials, is_gitlab_configured
 from rag_system import create_vector_store, is_vector_store_available, is_repo_match, get_stored_repo_name
 import time
 from datetime import datetime
@@ -150,6 +150,7 @@ def create_env_info_display():
     model_info = current_llm.get_model_info()
     current_model = model_info.get("model", OLLAMA_MODEL)
     provider = model_info.get("provider", "Ollama")
+    gitlab_url = get_gitlab_url()
     
     return f"""
     <div style="background: linear-gradient(135deg, #27272a 0%, #18181b 100%); padding: 20px; border-radius: 12px; border: 1px solid #3f3f46;">
@@ -157,7 +158,7 @@ def create_env_info_display():
         <div style="display: grid; gap: 12px;">
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
                 <strong style="color: #d4d4d8;">GitLab URL:</strong>
-                <code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{GITLAB_URL}</code>
+                <code style="background: #27272a; padding: 4px 8px; border-radius: 4px; color: #60a5fa; font-size: 0.9em; border: 1px solid #3f3f46;">{gitlab_url or "Not configured"}</code>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #1e1e2e; border-radius: 8px; border: 1px solid #3f3f46;">
                 <strong style="color: #d4d4d8;">Provider:</strong>
@@ -371,6 +372,72 @@ custom_css = """
     margin-bottom: 32px;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
 }
+/* Credentials Popup Modal Styles */
+.credentials-overlay {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    background: rgba(0, 0, 0, 0.7) !important;
+    backdrop-filter: blur(4px) !important;
+    z-index: 9998 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+.credentials-popup {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    background: linear-gradient(135deg, #1e1e2e 0%, #27272a 100%) !important;
+    padding: 32px !important;
+    border-radius: 20px !important;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(99, 102, 241, 0.2) !important;
+    z-index: 9999 !important;
+    min-width: 450px !important;
+    max-width: 550px !important;
+    border: 1px solid #3f3f46 !important;
+}
+.credentials-popup h2 {
+    color: #f4f4f5 !important;
+    margin: 0 0 8px 0 !important;
+    font-size: 1.5em !important;
+    font-weight: 700 !important;
+}
+.credentials-popup .subtitle {
+    color: #a1a1aa !important;
+    margin-bottom: 24px !important;
+    font-size: 0.95em !important;
+}
+.hint-box {
+    background: rgba(99, 102, 241, 0.1) !important;
+    border: 1px solid rgba(99, 102, 241, 0.3) !important;
+    border-radius: 8px !important;
+    padding: 12px !important;
+    margin-top: 8px !important;
+    font-size: 0.85em !important;
+    color: #a5b4fc !important;
+    line-height: 1.5 !important;
+}
+.hint-box code {
+    background: rgba(0, 0, 0, 0.3) !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-size: 0.9em !important;
+    color: #fcd34d !important;
+}
+.permission-badge {
+    display: inline-block !important;
+    background: rgba(16, 185, 129, 0.2) !important;
+    color: #34d399 !important;
+    padding: 2px 8px !important;
+    border-radius: 4px !important;
+    font-size: 0.8em !important;
+    margin: 2px !important;
+    border: 1px solid rgba(16, 185, 129, 0.3) !important;
+}
 /* Tab button styling - unselected */
 button[aria-selected="false"] {
     background: #27272a !important;
@@ -520,7 +587,67 @@ input[type="checkbox"]:focus,
 """
 
 # Create Gradio Interface
-with gr.Blocks(title= "AI-Reviewer") as demo:
+with gr.Blocks(title= "AI-Reviewer", css=custom_css) as demo:
+    
+    # ===== GitLab Credentials Popup =====
+    # Overlay background
+    credentials_overlay = gr.HTML(
+        value="<div class='credentials-overlay'></div>",
+        visible=not is_gitlab_configured(),
+        elem_id="credentials_overlay"
+    )
+    
+    # Popup container
+    with gr.Column(visible=not is_gitlab_configured(), elem_classes=["credentials-popup"]) as credentials_popup:
+        gr.HTML("""
+            <div style="text-align: center; margin-bottom: 20px;">
+                <div style="font-size: 3em; margin-bottom: 10px;">🔐</div>
+                <h2 style="margin: 0; color: #f4f4f5; font-weight: 700;">GitLab Configuration</h2>
+                <p class="subtitle" style="color: #a1a1aa; margin-top: 8px;">Connect to your GitLab instance to start reviewing code</p>
+            </div>
+        """)
+        
+        gitlab_url_input = gr.Textbox(
+            label="🌐 GitLab URL",
+            placeholder="https://gitlab.example.com",
+            value=get_gitlab_url() or "https://gitlab.gosi.ins",
+            interactive=True
+        )
+        gr.HTML("""
+            <div class="hint-box">
+                <strong>💡 Hint:</strong> Enter your GitLab instance URL (e.g., <code>https://gitlab.com</code> or your self-hosted GitLab URL)
+            </div>
+        """)
+        
+        gitlab_token_input = gr.Textbox(
+            label="🔑 GitLab Personal Access Token",
+            placeholder="glpat-xxxxxxxxxxxxxxxxxxxx",
+            value="",
+            type="password",
+            interactive=True
+        )
+        gr.HTML("""
+            <div class="hint-box">
+                <strong>💡 Hint:</strong> Create a Personal Access Token in GitLab → Settings → Access Tokens<br><br>
+                <strong>Required Permissions:</strong><br>
+                <span class="permission-badge">api</span>
+                <span class="permission-badge">read_api</span>
+                <span class="permission-badge">read_repository</span>
+                <span class="permission-badge">write_repository</span>
+                <br><br>
+                <em style="color: #71717a; font-size: 0.9em;">The token needs access to read projects, merge requests, and post comments.</em>
+            </div>
+        """)
+        
+        credentials_status = gr.HTML(value="", visible=False)
+        
+        connect_gitlab_btn = gr.Button(
+            "🚀 Connect to GitLab",
+            variant="primary",
+            size="lg"
+        )
+    
+    # ===== Main Application Header =====
     gr.Markdown("""
     <div class="main-header">
         <h1 style="margin: 0; font-size: 2.5em; color: white; font-weight: 700;">
@@ -633,6 +760,12 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
                     
                     with gr.Accordion("⚙️ Environment & Model Settings", open=False):
                         env_info_display = gr.HTML(value=create_env_info_display())
+                        
+                        reconfigure_gitlab_btn = gr.Button(
+                            "🔄 Reconfigure GitLab Connection",
+                            variant="secondary",
+                            size="sm"
+                        )
                         
                         model_provider_dropdown = gr.Dropdown(
                             label="🔌 Model Provider",
@@ -805,6 +938,73 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
     project_id_state = gr.State(value=None)
     mr_iid_state = gr.State(value=None)
     
+    # ===== Credentials Popup Event Handlers =====
+    def connect_to_gitlab(url, token):
+        """Validate and save GitLab credentials."""
+        if not url or not url.strip():
+            return (
+                gr.update(visible=True),   # Keep overlay visible
+                gr.update(visible=True),   # Keep popup visible
+                "<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Please enter a GitLab URL</div>",
+                gr.update(visible=True),
+                gr.update(choices=[], value=None),
+                "❌ Not connected"
+            )
+        
+        if not token or not token.strip():
+            return (
+                gr.update(visible=True),   # Keep overlay visible
+                gr.update(visible=True),   # Keep popup visible
+                "<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Please enter a GitLab Personal Access Token</div>",
+                gr.update(visible=True),
+                gr.update(choices=[], value=None),
+                "❌ Not connected"
+            )
+        
+        # Clean and save credentials
+        url = url.strip().rstrip('/')
+        token = token.strip()
+        
+        # Test the connection
+        try:
+            set_gitlab_credentials(url, token)
+            # Try to list projects to verify connection
+            projects = list_projects("")
+            if projects is not None:
+                choices = [f"{p['path_with_namespace']} (ID: {p['id']})" for p in projects]
+                return (
+                    gr.update(visible=False),  # Hide overlay
+                    gr.update(visible=False),  # Hide popup
+                    "",                         # Clear status
+                    gr.update(visible=False),
+                    gr.update(choices=choices, value=choices[0] if choices else None),
+                    f"✅ Connected! Found {len(projects)} project(s)"
+                )
+            else:
+                return (
+                    gr.update(visible=True),   # Keep overlay
+                    gr.update(visible=True),   # Keep popup
+                    "<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Connection failed. Please check your credentials and try again.</div>",
+                    gr.update(visible=True),
+                    gr.update(choices=[], value=None),
+                    "❌ Connection failed"
+                )
+        except Exception as e:
+            return (
+                gr.update(visible=True),   # Keep overlay
+                gr.update(visible=True),   # Keep popup
+                f"<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Error: {str(e)}</div>",
+                gr.update(visible=True),
+                gr.update(choices=[], value=None),
+                f"❌ Error: {str(e)}"
+            )
+    
+    connect_gitlab_btn.click(
+        connect_to_gitlab,
+        inputs=[gitlab_url_input, gitlab_token_input],
+        outputs=[credentials_overlay, credentials_popup, credentials_status, credentials_status, project_dropdown, project_status]
+    )
+    
     # Event handlers
     project_search.submit(
         load_projects,
@@ -911,10 +1111,49 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
         outputs=[env_info_display]
     )
     
-    # Load projects and models on startup
+    # Reconfigure GitLab connection
+    def show_credentials_popup():
+        """Show the credentials popup for reconfiguration."""
+        return (
+            gr.update(visible=True),   # Show overlay
+            gr.update(visible=True),   # Show popup
+            get_gitlab_url() or "https://gitlab.gosi.ins",    # Pre-fill URL
+            ""                          # Clear token for security
+        )
+    
+    reconfigure_gitlab_btn.click(
+        show_credentials_popup,
+        inputs=[],
+        outputs=[credentials_overlay, credentials_popup, gitlab_url_input, gitlab_token_input]
+    )
+    
+    # Load projects and models on startup (only if GitLab is configured)
+    def load_projects_on_startup():
+        """Load projects only if GitLab is configured."""
+        if is_gitlab_configured():
+            return load_projects("")
+        return gr.update(choices=[], value=None), "ℹ️ Please configure GitLab credentials"
+    
+    def show_credentials_popup_on_startup():
+        """Show credentials popup on startup if GitLab is not configured."""
+        return (
+            gr.update(visible=True),   # Show overlay
+            gr.update(visible=True),   # Show popup
+            get_gitlab_url() or "https://gitlab.gosi.ins",    # Pre-fill URL with default
+            ""                          # Clear token
+        )
+        
+    
+    # Show credentials popup on startup if not configured
     demo.load(
-        load_projects,
-        inputs=[gr.Textbox(value="", visible=False)],
+        show_credentials_popup_on_startup,
+        inputs=[],
+        outputs=[credentials_overlay, credentials_popup, gitlab_url_input, gitlab_token_input]
+    )
+    
+    demo.load(
+        load_projects_on_startup,
+        inputs=[],
         outputs=[project_dropdown, project_status]
     )
     demo.load(
@@ -929,4 +1168,4 @@ with gr.Blocks(title= "AI-Reviewer") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=False, css=custom_css, theme=gr.themes.Soft())
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False, theme=gr.themes.Soft())

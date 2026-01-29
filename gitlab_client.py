@@ -1,15 +1,45 @@
 import gitlab
-from config import GITLAB_URL, GITLAB_TOKEN
+from config import get_gitlab_url, get_gitlab_token
 
-gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN, ssl_verify=False)
+# GitLab client instance - created lazily
+_gl_instance = None
+_gl_config = {"url": None, "token": None}
+
+def get_gitlab_client():
+    """Get or create the GitLab client instance."""
+    global _gl_instance, _gl_config
+    
+    current_url = get_gitlab_url()
+    current_token = get_gitlab_token()
+    
+    # Check if we need to create/recreate the client
+    if (_gl_instance is None or 
+        _gl_config["url"] != current_url or 
+        _gl_config["token"] != current_token):
+        
+        if not current_url or not current_token:
+            return None
+        
+        _gl_instance = gitlab.Gitlab(current_url, private_token=current_token, ssl_verify=False)
+        _gl_config["url"] = current_url
+        _gl_config["token"] = current_token
+    
+    return _gl_instance
+
 
 def get_project_by_path(path_with_namespace: str):
     """
     Example: mobile/flutter-super-app
     """
+    gl = get_gitlab_client()
+    if gl is None:
+        raise RuntimeError("GitLab is not configured. Please provide GitLab URL and token.")
     return gl.projects.get(path_with_namespace)
 
 def get_mr(project_id, mr_iid):
+    gl = get_gitlab_client()
+    if gl is None:
+        raise RuntimeError("GitLab is not configured. Please provide GitLab URL and token.")
     project = gl.projects.get(project_id)
     return project.mergerequests.get(mr_iid)
 
@@ -19,6 +49,9 @@ def get_mr_diffs(project_id, mr_iid):
     return changes
 
 def post_inline_comment(project_id, mr_iid, body, file_path, new_line, old_line=None, position_type="text"):
+    gl = get_gitlab_client()
+    if gl is None:
+        raise RuntimeError("GitLab is not configured. Please provide GitLab URL and token.")
     project = gl.projects.get(project_id)
     mr = project.mergerequests.get(mr_iid)
 
@@ -68,6 +101,11 @@ def post_summary_comment(project_id, mr_iid, body):
 def list_projects(search_term=""):
     """List all projects accessible by the user."""
     try:
+        gl = get_gitlab_client()
+        if gl is None:
+            print("GitLab is not configured")
+            return []
+        
         if search_term:
             # Use search parameter for filtered results
             projects = gl.projects.list(search=search_term, all=True)
@@ -98,6 +136,10 @@ def list_projects(search_term=""):
 def list_merge_requests(project_id, state="opened"):
     """List merge requests for a project."""
     try:
+        gl = get_gitlab_client()
+        if gl is None:
+            print("GitLab is not configured")
+            return []
         project = gl.projects.get(project_id)
         mrs = project.mergerequests.list(state=state, all=True)
         result = []
