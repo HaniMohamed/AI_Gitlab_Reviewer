@@ -172,6 +172,7 @@ config.local.py
 .env.local
 .env.*.local
 secrets.json
+.gitlab_credentials_cache.json
 
 # Database files
 *.db

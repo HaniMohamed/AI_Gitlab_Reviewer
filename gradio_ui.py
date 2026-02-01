@@ -1352,13 +1352,23 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
         return gr.update(choices=[], value=None), "ℹ️ Please configure GitLab credentials"
     
     def show_credentials_popup_on_startup():
-        """Show credentials popup on startup if GitLab is not configured."""
-        return (
-            gr.update(visible=True),   # Show overlay
-            gr.update(visible=True),   # Show popup
-            get_gitlab_url() or "https://gitlab.gosi.ins",    # Pre-fill URL with default
-            ""                          # Clear token
-        )
+        """Show credentials popup on startup only if GitLab is not configured."""
+        if is_gitlab_configured():
+            # Credentials exist in cache or env, don't show popup
+            return (
+                gr.update(visible=False),  # Hide overlay
+                gr.update(visible=False),  # Hide popup
+                get_gitlab_url(),          # Keep current URL
+                ""                          # Don't show token
+            )
+        else:
+            # No valid credentials, show popup
+            return (
+                gr.update(visible=True),   # Show overlay
+                gr.update(visible=True),   # Show popup
+                get_gitlab_url() or "https://gitlab.gosi.ins",    # Pre-fill URL with default
+                ""                          # Clear token
+            )
         
     
     # Show credentials popup on startup if not configured
