@@ -2,30 +2,36 @@ import gradio as gr
 from gitlab_client import list_projects, list_merge_requests, get_mr, get_mr_diffs, post_inline_comment
 from reviewer import review_merge_request, review_merge_request_stream, get_available_models, set_model, get_current_model, set_stop_flag, reset_stop_flag
 from models import ModelProvider, get_llm
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL, get_gitlab_url, get_gitlab_token, set_gitlab_credentials, is_gitlab_configured
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL, get_gitlab_url, get_gitlab_token, is_gitlab_configured
 from rag_system import create_vector_store, is_vector_store_available, is_repo_match, get_stored_repo_name
 import time
 from datetime import datetime
 import threading
 import os
 
-def load_projects(search_term=""):
+def load_projects(search_term="", credentials=None):
     """Load projects from GitLab."""
-    projects = list_projects(search_term)
+    gitlab_url = credentials.get("url") if credentials else None
+    gitlab_token = credentials.get("token") if credentials else None
+    
+    projects = list_projects(search_term, gitlab_url, gitlab_token)
     if not projects:
         return gr.update(choices=[], value=None), "❌ No projects found. Please check your GitLab configuration."
     
     choices = [f"{p['path_with_namespace']} (ID: {p['id']})" for p in projects]
     return gr.update(choices=choices, value=choices[0] if choices else None), f"✅ Found {len(projects)} project(s)"
 
-def load_merge_requests(project_selection):
+def load_merge_requests(project_selection, credentials=None):
     """Load merge requests for selected project."""
     if not project_selection:
         return gr.update(choices=[], value=None), "", None
     
+    gitlab_url = credentials.get("url") if credentials else None
+    gitlab_token = credentials.get("token") if credentials else None
+    
     try:
         project_id = int(project_selection.split("(ID: ")[1].split(")")[0])
-        mrs = list_merge_requests(project_id, state="opened")
+        mrs = list_merge_requests(project_id, state="opened", gitlab_url=gitlab_url, gitlab_token=gitlab_token)
         
         if not mrs:
             return gr.update(choices=[], value=None), "ℹ️ No open merge requests found for this project.", None
@@ -41,16 +47,19 @@ def load_merge_requests(project_selection):
     except Exception as e:
         return gr.update(choices=[], value=None), f"❌ Error loading MRs: {str(e)}", None
 
-def on_mr_select(project_selection, mr_selection):
+def on_mr_select(project_selection, mr_selection, credentials=None):
     """Update MR info when MR is selected."""
     if not mr_selection or not project_selection:
         return "", None, None
+    
+    gitlab_url = credentials.get("url") if credentials else None
+    gitlab_token = credentials.get("token") if credentials else None
     
     try:
         project_id = int(project_selection.split("(ID: ")[1].split(")")[0])
         mr_iid = int(mr_selection.split("!")[1].split(":")[0])
         
-        mrs = list_merge_requests(project_id, state="opened")
+        mrs = list_merge_requests(project_id, state="opened", gitlab_url=gitlab_url, gitlab_token=gitlab_token)
         selected_mr = next((mr for mr in mrs if mr['iid'] == mr_iid), None)
         
         if selected_mr:
@@ -144,13 +153,13 @@ def switch_model(provider, model_name, api_endpoint=None, api_key=None):
     except Exception as e:
         return f"❌ Error switching model: {str(e)}"
 
-def create_env_info_display():
+def create_env_info_display(credentials=None):
     """Create HTML display for environment information."""
     current_llm = get_llm()
     model_info = current_llm.get_model_info()
     current_model = model_info.get("model", OLLAMA_MODEL)
     provider = model_info.get("provider", "Ollama")
-    gitlab_url = get_gitlab_url()
+    gitlab_url = credentials.get("url") if credentials else get_gitlab_url()
     
     return f"""
     <div style="background: linear-gradient(135deg, #27272a 0%, #18181b 100%); padding: 20px; border-radius: 12px; border: 1px solid #3f3f46;">
@@ -175,7 +184,7 @@ def create_env_info_display():
     """
 
 def run_review(project_selection, mr_selection, post_comments, model_provider, model_name, use_rag, 
-               api_endpoint, api_key, progress=gr.Progress()):
+               api_endpoint, api_key, credentials=None, progress=gr.Progress()):
     """Run the AI review on selected MR with streaming results.
     
     Yields:
@@ -186,6 +195,8 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
         - posted_indices: Set of posted finding indices (empty set initially)
     """
     preview_mode = not post_comments  # Preview mode when not auto-posting
+    gitlab_url = credentials.get("url") if credentials else None
+    gitlab_token = credentials.get("token") if credentials else None
     
     # Error yield helper
     def error_yield(html, msg, progress):
@@ -243,7 +254,7 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
         mr_iid = int(mr_selection.split("!")[1].split(":")[0])
         
         # Get total files count for progress
-        total_files = len(get_mr_diffs(project_id, mr_iid))
+        total_files = len(get_mr_diffs(project_id, mr_iid, gitlab_url=gitlab_url, gitlab_token=gitlab_token))
         
         # Stream results as they come in
         for results in review_merge_request_stream(
@@ -253,7 +264,9 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
             use_rag=use_rag,
             provider=model_provider,
             api_key=api_key if model_provider == ModelProvider.API else None,
-            api_endpoint=api_endpoint if model_provider == ModelProvider.API else None
+            api_endpoint=api_endpoint if model_provider == ModelProvider.API else None,
+            gitlab_url=gitlab_url,
+            gitlab_token=gitlab_token
         ):
             elapsed_time = int(time.time() - start_time)
             findings = results.get('findings', [])
@@ -653,9 +666,11 @@ input[type="checkbox"]:focus,
 }
 """
 
-# JavaScript for post button functionality (injected into page head)
+# JavaScript for post button functionality and localStorage credentials caching (injected into page head)
 post_finding_js = """
 <script>
+    
+    // ===== Post Finding Functionality =====
     // Define postFinding function globally
     window.postFinding = function(index) {
         console.log('postFinding called with index:', index);
@@ -746,7 +761,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
             label="🌐 GitLab URL",
             placeholder="https://gitlab.example.com",
             value=get_gitlab_url() or "https://gitlab.gosi.ins",
-            interactive=True
+            interactive=True,
+            elem_id="gitlab_url_input"
         )
         gr.HTML("""
             <div class="hint-box">
@@ -759,7 +775,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
             placeholder="glpat-xxxxxxxxxxxxxxxxxxxx",
             value="",
             type="password",
-            interactive=True
+            interactive=True,
+            elem_id="gitlab_token_input"
         )
         gr.HTML("""
             <div class="hint-box">
@@ -779,7 +796,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
         connect_gitlab_btn = gr.Button(
             "🚀 Connect to GitLab",
             variant="primary",
-            size="lg"
+            size="lg",
+            elem_id="connect_gitlab_btn"
         )
     
     # ===== Main Application Header =====
@@ -1091,10 +1109,19 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     mr_iid_state = gr.State(value=None)
     findings_state = gr.State(value=[])  # Store findings for manual posting
     posted_indices_state = gr.State(value=set())  # Track which findings have been posted
+    credentials_state = gr.State(value={"url": None, "token": None})  # Per-session GitLab credentials
+    
+    # Hidden textboxes for receiving cached credentials from JavaScript
+    cached_url_input = gr.Textbox(value="", visible=False, elem_id="cached_url_input")
+    cached_token_input = gr.Textbox(value="", visible=False, elem_id="cached_token_input")
     
     # ===== Credentials Popup Event Handlers =====
     def connect_to_gitlab(url, token):
         """Validate and save GitLab credentials."""
+        import json as json_module
+        
+        empty_creds = {"url": None, "token": None}
+        
         if not url or not url.strip():
             return (
                 gr.update(visible=True),   # Keep overlay visible
@@ -1102,7 +1129,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
                 "<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Please enter a GitLab URL</div>",
                 gr.update(visible=True),
                 gr.update(choices=[], value=None),
-                "❌ Not connected"
+                "❌ Not connected",
+                empty_creds  # credentials_state
             )
         
         if not token or not token.strip():
@@ -1112,18 +1140,19 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
                 "<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Please enter a GitLab Personal Access Token</div>",
                 gr.update(visible=True),
                 gr.update(choices=[], value=None),
-                "❌ Not connected"
+                "❌ Not connected",
+                empty_creds  # credentials_state
             )
         
-        # Clean and save credentials
+        # Clean credentials
         url = url.strip().rstrip('/')
         token = token.strip()
+        credentials = {"url": url, "token": token}
         
-        # Test the connection
+        # Test the connection with session credentials
         try:
-            set_gitlab_credentials(url, token)
             # Try to list projects to verify connection
-            projects = list_projects("")
+            projects = list_projects("", url, token)
             if projects is not None:
                 choices = [f"{p['path_with_namespace']} (ID: {p['id']})" for p in projects]
                 return (
@@ -1132,7 +1161,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
                     "",                         # Clear status
                     gr.update(visible=False),
                     gr.update(choices=choices, value=choices[0] if choices else None),
-                    f"✅ Connected! Found {len(projects)} project(s)"
+                    f"✅ Connected! Found {len(projects)} project(s)",
+                    credentials  # credentials_state
                 )
             else:
                 return (
@@ -1141,7 +1171,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
                     "<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Connection failed. Please check your credentials and try again.</div>",
                     gr.update(visible=True),
                     gr.update(choices=[], value=None),
-                    "❌ Connection failed"
+                    "❌ Connection failed",
+                    empty_creds  # credentials_state
                 )
         except Exception as e:
             return (
@@ -1150,25 +1181,51 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
                 f"<div style='color: #f87171; padding: 10px; background: rgba(248, 113, 113, 0.1); border-radius: 8px; margin-top: 10px; border: 1px solid rgba(248, 113, 113, 0.3);'>⚠️ Error: {str(e)}</div>",
                 gr.update(visible=True),
                 gr.update(choices=[], value=None),
-                f"❌ Error: {str(e)}"
+                f"❌ Error: {str(e)}",
+                empty_creds  # credentials_state
             )
+    
+    # JavaScript to save credentials to localStorage after successful connection
+    save_credentials_js = """
+    (url, token) => {
+        if (url && token && url.trim() && token.trim()) {
+            const cacheData = {
+                gitlab_url: url.trim(),
+                gitlab_token: token.trim(),
+                timestamp: Date.now()
+            };
+            localStorage.setItem('gitlab_credentials_cache', JSON.stringify(cacheData));
+            console.log('Credentials saved to browser cache');
+        }
+        return [url, token];
+    }
+    """
     
     connect_gitlab_btn.click(
         connect_to_gitlab,
         inputs=[gitlab_url_input, gitlab_token_input],
-        outputs=[credentials_overlay, credentials_popup, credentials_status, credentials_status, project_dropdown, project_status]
+        outputs=[credentials_overlay, credentials_popup, credentials_status, credentials_status, project_dropdown, project_status, credentials_state]
+    ).then(
+        fn=None,
+        inputs=[gitlab_url_input, gitlab_token_input],
+        outputs=[gitlab_url_input, gitlab_token_input],
+        js=save_credentials_js
     )
     
     # Event handlers
+    def search_projects_with_creds(search_term, credentials):
+        """Wrapper to pass credentials to load_projects."""
+        return load_projects(search_term, credentials=credentials)
+    
     project_search.submit(
-        load_projects,
-        inputs=[project_search],
+        search_projects_with_creds,
+        inputs=[project_search, credentials_state],
         outputs=[project_dropdown, project_status]
     )
     
-    def on_project_change(project_selection):
+    def on_project_change(project_selection, credentials):
         """Handle project change - load MRs and update RAG checkbox state."""
-        mr_result = load_merge_requests(project_selection)
+        mr_result = load_merge_requests(project_selection, credentials=credentials)
         rag_checkbox_state, rag_message_state = get_rag_checkbox_state(project_selection)
         return (
             mr_result[0],  # mr_dropdown
@@ -1180,13 +1237,17 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     
     project_dropdown.change(
         on_project_change,
-        inputs=[project_dropdown],
+        inputs=[project_dropdown, credentials_state],
         outputs=[mr_dropdown, mr_info_display, project_id_state, use_rag_checkbox, rag_status_message]
     )
     
+    def on_mr_select_with_creds(project_selection, mr_selection, credentials):
+        """Wrapper to pass credentials to on_mr_select."""
+        return on_mr_select(project_selection, mr_selection, credentials=credentials)
+    
     mr_dropdown.change(
-        on_mr_select,
-        inputs=[project_dropdown, mr_dropdown],
+        on_mr_select_with_creds,
+        inputs=[project_dropdown, mr_dropdown, credentials_state],
         outputs=[mr_info_display, project_id_state, mr_iid_state]
     )
     
@@ -1207,7 +1268,7 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
             "⏹️ Stopping review..."    # Progress message
     )
     
-    def run_review_wrapper(project, mr, post_comments, provider, ollama_model, api_model, use_rag, api_endpoint, api_key):
+    def run_review_wrapper(project, mr, post_comments, provider, ollama_model, api_model, use_rag, api_endpoint, api_key, credentials):
         """Wrapper to prepare parameters for run_review."""
         model_name = ollama_model if provider == ModelProvider.OLLAMA else api_model
         # Yield from the generator to properly stream results
@@ -1217,7 +1278,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
             model_name,
             use_rag,
             api_endpoint if provider == ModelProvider.API else None,
-            api_key if provider == ModelProvider.API else None
+            api_key if provider == ModelProvider.API else None,
+            credentials=credentials
         )
     
     review_button.click(
@@ -1228,7 +1290,7 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     ).then(
         run_review_wrapper,
         inputs=[project_dropdown, mr_dropdown, post_comments_checkbox, model_provider_dropdown,
-                model_dropdown, api_model_name, use_rag_checkbox, api_endpoint_input, api_key_input],
+                model_dropdown, api_model_name, use_rag_checkbox, api_endpoint_input, api_key_input, credentials_state],
         outputs=[review_output, summary_output, progress_display, findings_state, posted_indices_state]
     ).then(
         lambda: (
@@ -1261,8 +1323,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
         inputs=[model_provider_dropdown, model_dropdown, api_model_name, api_endpoint_input, api_key_input],
         outputs=[model_status]
     ).then(
-        lambda: create_env_info_display(),
-        inputs=[],
+        lambda credentials: create_env_info_display(credentials),
+        inputs=[credentials_state],
         outputs=[env_info_display]
     )
     
@@ -1283,10 +1345,13 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     )
     
     # Post individual comment handler (triggered by button click)
-    def post_single_comment(finding_num, findings, posted_indices, project_selection, mr_selection):
+    def post_single_comment(finding_num, findings, posted_indices, project_selection, mr_selection, credentials):
         """Post a single finding as an inline comment to GitLab."""
         if finding_num is None or finding_num < 0 or not findings:
             return ("", findings, posted_indices, gr.update(), -1)
+        
+        gitlab_url = credentials.get("url") if credentials else None
+        gitlab_token = credentials.get("token") if credentials else None
         
         try:
             idx = int(finding_num)
@@ -1309,14 +1374,16 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
             project_id = int(project_selection.split("(ID: ")[1].split(")")[0])
             mr_iid = int(mr_selection.split("!")[1].split(":")[0])
             
-            # Post the comment
+            # Post the comment with session credentials
             comment_body = f"**{finding['severity'].upper()}**: {finding['comment']}"
             post_inline_comment(
                 project_id=project_id,
                 mr_iid=mr_iid,
                 body=comment_body,
                 file_path=finding['file'],
-                new_line=finding['line']
+                new_line=finding['line'],
+                gitlab_url=gitlab_url,
+                gitlab_token=gitlab_token
             )
             
             # Update posted indices
@@ -1340,48 +1407,88 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     # Trigger post when button is clicked
     post_single_btn.click(
         post_single_comment,
-        inputs=[post_finding_num, findings_state, posted_indices_state, project_dropdown, mr_dropdown],
+        inputs=[post_finding_num, findings_state, posted_indices_state, project_dropdown, mr_dropdown, credentials_state],
         outputs=[post_single_status, findings_state, posted_indices_state, review_output, post_finding_num]
     )
     
-    # Load projects and models on startup (only if GitLab is configured)
-    def load_projects_on_startup():
-        """Load projects only if GitLab is configured."""
-        if is_gitlab_configured():
-            return load_projects("")
-        return gr.update(choices=[], value=None), "ℹ️ Please configure GitLab credentials"
+    # JavaScript to read cached credentials from localStorage on page load
+    read_cached_credentials_js = """
+    () => {
+        try {
+            const cached = localStorage.getItem('gitlab_credentials_cache');
+            if (cached) {
+                const data = JSON.parse(cached);
+                const ageHours = (Date.now() - data.timestamp) / (1000 * 60 * 60);
+                if (ageHours < 24 && data.gitlab_url && data.gitlab_token) {
+                    console.log('Found valid cached credentials (age: ' + ageHours.toFixed(1) + ' hours)');
+                    return [data.gitlab_url, data.gitlab_token];
+                } else {
+                    console.log('Cached credentials expired or invalid');
+                    localStorage.removeItem('gitlab_credentials_cache');
+                }
+            }
+        } catch (e) {
+            console.error('Error reading cached credentials:', e);
+        }
+        return ['', ''];
+    }
+    """
     
-    def show_credentials_popup_on_startup():
-        """Show credentials popup on startup only if GitLab is not configured."""
+    def auto_connect_with_cached_credentials(url, token):
+        """Auto-connect using cached credentials from browser localStorage."""
+        if url and token and url.strip() and token.strip():
+            url = url.strip().rstrip('/')
+            token = token.strip()
+            credentials = {"url": url, "token": token}
+            
+            try:
+                # Try to list projects to verify connection
+                projects = list_projects("", url, token)
+                if projects is not None:
+                    choices = [f"{p['path_with_namespace']} (ID: {p['id']})" for p in projects]
+                    return (
+                        gr.update(visible=False),  # Hide overlay
+                        gr.update(visible=False),  # Hide popup
+                        url,  # Keep URL in input
+                        "",   # Clear token from input for security
+                        gr.update(choices=choices, value=choices[0] if choices else None),
+                        f"✅ Connected! Found {len(projects)} project(s)",
+                        credentials  # credentials_state
+                    )
+            except Exception as e:
+                print(f"Auto-connect failed: {e}")
+        
+        # If auto-connect failed or no cached credentials, show popup
+        default_url = get_gitlab_url() or "https://gitlab.gosi.ins"
         if is_gitlab_configured():
-            # Credentials exist in cache or env, don't show popup
+            # Env vars configured
             return (
-                gr.update(visible=False),  # Hide overlay
-                gr.update(visible=False),  # Hide popup
-                get_gitlab_url(),          # Keep current URL
-                ""                          # Don't show token
+                gr.update(visible=False),
+                gr.update(visible=False),
+                get_gitlab_url(),
+                "",
+                gr.update(),
+                "✅ Connected via environment variables",
+                {"url": get_gitlab_url(), "token": get_gitlab_token()}
             )
         else:
-            # No valid credentials, show popup
+            # Show popup
             return (
-                gr.update(visible=True),   # Show overlay
-                gr.update(visible=True),   # Show popup
-                get_gitlab_url() or "https://gitlab.gosi.ins",    # Pre-fill URL with default
-                ""                          # Clear token
+                gr.update(visible=True),
+                gr.update(visible=True),
+                url or default_url,
+                "",
+                gr.update(choices=[], value=None),
+                "ℹ️ Please configure GitLab credentials",
+                {"url": None, "token": None}
             )
-        
     
-    # Show credentials popup on startup if not configured
+    # On page load, read cached credentials from localStorage and try to auto-connect
     demo.load(
-        show_credentials_popup_on_startup,
-        inputs=[],
-        outputs=[credentials_overlay, credentials_popup, gitlab_url_input, gitlab_token_input]
-    )
-    
-    demo.load(
-        load_projects_on_startup,
-        inputs=[],
-        outputs=[project_dropdown, project_status]
+        auto_connect_with_cached_credentials,
+        inputs=[cached_url_input, cached_token_input],
+        outputs=[credentials_overlay, credentials_popup, gitlab_url_input, gitlab_token_input, project_dropdown, project_status, credentials_state],
+        js=read_cached_credentials_js
     )
     demo.load(
         load_available_models,

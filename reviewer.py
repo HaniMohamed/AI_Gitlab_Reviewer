@@ -196,7 +196,8 @@ def is_stopped():
     return _stop_review_flag.is_set()
 
 def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False, 
-                                provider=None, api_key=None, api_endpoint=None):
+                                provider=None, api_key=None, api_endpoint=None,
+                                gitlab_url=None, gitlab_token=None):
     """
     Review a merge request and yield results incrementally as a generator.
     Yields partial results as they're processed.
@@ -210,6 +211,8 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         provider: Optional provider type ("ollama" or "api")
         api_key: Optional API key for API-based models
         api_endpoint: Optional API endpoint for API-based models
+        gitlab_url: Optional GitLab URL (for session-based credentials)
+        gitlab_token: Optional GitLab token (for session-based credentials)
     """
     # Use specified model or current global model
     if model_name:
@@ -240,7 +243,7 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
     # Reset stop flag at start
     reset_stop_flag()
     
-    diffs = get_mr_diffs(project_id, mr_iid)
+    diffs = get_mr_diffs(project_id, mr_iid, gitlab_url=gitlab_url, gitlab_token=gitlab_token)
     all_findings = []
     summary = []
 
@@ -322,7 +325,9 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
                     body=f"**{item['severity'].upper()}**: {item['comment']}",
                     file_path=file_path,
                     new_line=actual_line_num,
-                    old_line=None
+                    old_line=None,
+                    gitlab_url=gitlab_url,
+                    gitlab_token=gitlab_token
                 )
             
             summary.append(f"- `{file_path}:{actual_line_num}` {item['comment']}\n({item.get('line_code', '')})")
@@ -341,7 +346,9 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
         post_summary_comment(
             project_id,
             mr_iid,
-            "### 🤖 AI Review Summary\n" + "\n".join(summary)
+            "### 🤖 AI Review Summary\n" + "\n".join(summary),
+            gitlab_url=gitlab_url,
+            gitlab_token=gitlab_token
         )
     
     # Final yield with done=True
@@ -355,7 +362,8 @@ def review_merge_request_stream(project_id, mr_iid, post_comments=True, model_na
     }
 
 def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None, use_rag=False,
-                         provider=None, api_key=None, api_endpoint=None):
+                         provider=None, api_key=None, api_endpoint=None,
+                         gitlab_url=None, gitlab_token=None):
     """
     Review a merge request and optionally post comments.
     Returns review results as a dictionary.
@@ -369,10 +377,13 @@ def review_merge_request(project_id, mr_iid, post_comments=True, model_name=None
         provider: Optional provider type ("ollama" or "api")
         api_key: Optional API key for API-based models
         api_endpoint: Optional API endpoint for API-based models
+        gitlab_url: Optional GitLab URL (for session-based credentials)
+        gitlab_token: Optional GitLab token (for session-based credentials)
     """
     # Use the streaming version and get the final result
     for result in review_merge_request_stream(project_id, mr_iid, post_comments, model_name, use_rag,
-                                               provider, api_key, api_endpoint):
+                                               provider, api_key, api_endpoint,
+                                               gitlab_url=gitlab_url, gitlab_token=gitlab_token):
         if result.get('done', False):
             # Remove 'done' key before returning
             result.pop('done', None)
