@@ -312,13 +312,14 @@ def run_review(project_selection, mr_selection, post_comments, model_provider, m
         """
         yield error_yield(error_html, f"❌ Review failed after {elapsed_time}s. Error: {error}", f"❌ Failed after {elapsed_time}s")
 
-def format_findings(findings, preview_mode=False, posted_indices=None):
+def format_findings(findings, preview_mode=False, posted_indices=None, severity_filter=None):
     """Format findings as HTML.
     
     Args:
         findings: List of findings from the review
         preview_mode: If True, show post buttons for manual posting
         posted_indices: Set of indices that have been successfully posted
+        severity_filter: Optional filter - "All", "High", "Medium", or "Low"
     """
     if posted_indices is None:
         posted_indices = set()
@@ -330,6 +331,20 @@ def format_findings(findings, preview_mode=False, posted_indices=None):
             <p style="margin-top: 12px; font-size: 1.1em; color: rgba(255,255,255,0.95);">Great job! The code looks good. 🎉</p>
         </div>
         """
+    
+    # Filter by severity if requested (preserve original indices for Post button)
+    if severity_filter and severity_filter != "All":
+        filter_lower = severity_filter.lower()
+        filtered = [(i, f) for i, f in enumerate(findings) if f.get('severity', '').lower() == filter_lower]
+        if not filtered:
+            return """
+            <div style="padding: 40px; text-align: center; background: linear-gradient(135deg, #3f3f46 0%, #27272a 100%); border-radius: 12px; color: #e4e4e7; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 1px solid #3f3f46;">
+                <h2 style="margin: 0; color: #f4f4f5; font-weight: 600;">No findings available</h2>
+                <p style="margin-top: 12px; font-size: 1.1em; color: #a1a1aa;">No findings with severity "{sev}" in this review.</p>
+            </div>
+            """.replace("{sev}", severity_filter)
+    else:
+        filtered = [(i, f) for i, f in enumerate(findings)]
     
     severity_colors = {
         'high': 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
@@ -345,7 +360,7 @@ def format_findings(findings, preview_mode=False, posted_indices=None):
     
     html = "<div style='display: flex; flex-direction: column; gap: 16px;'>"
     
-    for idx, finding in enumerate(findings):
+    for idx, finding in filtered:
         severity = finding['severity'].lower()
         color = severity_colors.get(severity, severity_colors['low'])
         icon = severity_icons.get(severity, '🔵')
@@ -983,6 +998,13 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
                     
                     with gr.Tabs():
                         with gr.Tab("📊 Review Results"):
+                            severity_filter = gr.Radio(
+                                choices=["All", "High", "Medium", "Low"],
+                                value="All",
+                                label="Filter by severity",
+                                interactive=True,
+                                elem_id="severity_filter"
+                            )
                             review_output = gr.HTML(
                                 label="Review Findings",
                                 value="<div style='padding: 40px; text-align: center; color: #a1a1aa; background: #27272a; border-radius: 12px; border: 2px dashed #3f3f46;'>Click 'Start AI Review' to begin</div>"
@@ -1296,14 +1318,29 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
         lambda: (
             gr.update(visible=True),   # Show start button
             gr.update(visible=False),  # Hide stop button
-            ""  # Clear post status
+            "",                        # Clear post status
+            gr.update(value="All")     # Reset severity filter to All for new results
         ),
-        outputs=[review_button, stop_button, post_single_status]
+        outputs=[review_button, stop_button, post_single_status, severity_filter]
     )
     
     stop_button.click(
         stop_review,
         outputs=[review_button, stop_button, progress_display]
+    )
+    
+    # Severity filter - dynamically update findings view
+    def apply_severity_filter(findings, severity_filter, posted_indices, post_comments):
+        """Re-render findings with severity filter applied."""
+        if not findings:
+            return "<div style='padding: 40px; text-align: center; color: #a1a1aa; background: #27272a; border-radius: 12px; border: 2px dashed #3f3f46;'>No findings to filter. Run a review first.</div>"
+        preview_mode = not post_comments
+        return format_findings(findings, preview_mode=preview_mode, posted_indices=posted_indices, severity_filter=severity_filter)
+    
+    severity_filter.change(
+        apply_severity_filter,
+        inputs=[findings_state, severity_filter, posted_indices_state, post_comments_checkbox],
+        outputs=[review_output]
     )
     
     # Model management
@@ -1345,7 +1382,7 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     )
     
     # Post individual comment handler (triggered by button click)
-    def post_single_comment(finding_num, findings, posted_indices, project_selection, mr_selection, credentials):
+    def post_single_comment(finding_num, findings, posted_indices, project_selection, mr_selection, credentials, severity_filter):
         """Post a single finding as an inline comment to GitLab."""
         if finding_num is None or finding_num < 0 or not findings:
             return ("", findings, posted_indices, gr.update(), -1)
@@ -1390,8 +1427,8 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
             new_posted_indices = posted_indices.copy()
             new_posted_indices.add(idx)
             
-            # Reformat findings with updated posted status
-            updated_html = format_findings(findings, preview_mode=True, posted_indices=new_posted_indices)
+            # Reformat findings with updated posted status (preserve severity filter)
+            updated_html = format_findings(findings, preview_mode=True, posted_indices=new_posted_indices, severity_filter=severity_filter)
             
             return (
                 f"<div style='color: #34d399; padding: 12px 16px; background: rgba(16, 185, 129, 0.15); border-radius: 10px; border: 1px solid rgba(16, 185, 129, 0.3); margin-top: 12px; display: flex; align-items: center; gap: 8px;'><svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5'><polyline points='20 6 9 17 4 12'></polyline></svg> Posted to {finding['file']}:{finding['line']}</div>",
@@ -1407,7 +1444,7 @@ with gr.Blocks(title="AI-Reviewer", css=custom_css, head=post_finding_js) as dem
     # Trigger post when button is clicked
     post_single_btn.click(
         post_single_comment,
-        inputs=[post_finding_num, findings_state, posted_indices_state, project_dropdown, mr_dropdown, credentials_state],
+        inputs=[post_finding_num, findings_state, posted_indices_state, project_dropdown, mr_dropdown, credentials_state, severity_filter],
         outputs=[post_single_status, findings_state, posted_indices_state, review_output, post_finding_num]
     )
     
